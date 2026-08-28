@@ -1,4 +1,32 @@
-require("dotenv").config();
+// ======================================================
+// TRILOK DISCORD BOT
+// DM TICKETS + AUTOMOD + SECURITY + ANNOUNCEMENTS
+// RENDER FREE WEB SERVICE VERSION
+// ======================================================
+
+const http = require("http");
+
+// ======================================================
+// RENDER PORT SERVER
+// ======================================================
+
+const PORT = Number(process.env.PORT) || 10000;
+
+const webServer = http.createServer((req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/plain; charset=utf-8"
+  });
+
+  res.end("TRILOK BOT ONLINE");
+});
+
+webServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`WEB SERVER READY ON PORT ${PORT}`);
+});
+
+// ======================================================
+// DISCORD
+// ======================================================
 
 const {
   Client,
@@ -12,74 +40,45 @@ const {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle,
-  Collection
+  ButtonStyle
 } = require("discord.js");
 
-const fs = require("fs");
-const path = require("path");
-
-// ===============================
-// CONFIG
-// ===============================
+// ======================================================
+// ENVIRONMENT VARIABLES
+// ======================================================
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
-const GUILD_ID = "1493700265499689154";
-const SUPPORT_ROLE_ID = "1542498406981959801";
-const SUPPORT_LOG_CHANNEL_ID = "1542500573000106024";
+// ======================================================
+// YOUR SERVER SETTINGS
+// ======================================================
 
-if (!TOKEN || !CLIENT_ID) {
-  console.error("Missing DISCORD_TOKEN or CLIENT_ID in Render Environment Variables.");
+const GUILD_ID = "1493700265499689154";
+
+const SUPPORT_ROLE_ID =
+  "1542498406981959801";
+
+const SUPPORT_LOG_CHANNEL_ID =
+  "1542500573000106024";
+
+// ======================================================
+// ENVIRONMENT CHECK
+// ======================================================
+
+if (!TOKEN) {
+  console.error("DISCORD_TOKEN is missing.");
   process.exit(1);
 }
 
-// ===============================
-// STORAGE
-// ===============================
-
-const dataDir = path.join(__dirname, "data");
-
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+if (!CLIENT_ID) {
+  console.error("CLIENT_ID is missing.");
+  process.exit(1);
 }
 
-const files = {
-  tickets: path.join(dataDir, "tickets.json"),
-  config: path.join(dataDir, "config.json"),
-  warnings: path.join(dataDir, "warnings.json"),
-  schedules: path.join(dataDir, "schedules.json"),
-  security: path.join(dataDir, "security.json")
-};
-
-function ensureFile(file, fallback) {
-  if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, JSON.stringify(fallback, null, 2));
-  }
-}
-
-ensureFile(files.tickets, {});
-ensureFile(files.config, {});
-ensureFile(files.warnings, {});
-ensureFile(files.schedules, []);
-ensureFile(files.security, {});
-
-function readJSON(file, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJSON(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
-}
-
-// ===============================
-// CLIENT
-// ===============================
+// ======================================================
+// DISCORD CLIENT
+// ======================================================
 
 const client = new Client({
   intents: [
@@ -90,107 +89,239 @@ const client = new Client({
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.GuildModeration
   ],
-  partials: [Partials.Channel, Partials.Message, Partials.User]
+
+  partials: [
+    Partials.Channel,
+    Partials.Message,
+    Partials.User
+  ]
 });
 
-// ===============================
-// COMMANDS
-// ===============================
+// ======================================================
+// MEMORY STORAGE
+// ======================================================
+
+const tickets = new Map();
+
+let ticketCategoryId = null;
+
+const botConfig = {
+  automod: true,
+  security: true,
+  spamLimit: 6,
+  timeoutSeconds: 60
+};
+
+const spamTracker = new Map();
+
+let recentJoins = [];
+
+// ======================================================
+// STAFF CHECK
+// ======================================================
+
+function isStaff(member) {
+  if (!member) return false;
+
+  return (
+    member.permissions.has(
+      PermissionFlagsBits.Administrator
+    ) ||
+    member.roles.cache.has(
+      SUPPORT_ROLE_ID
+    )
+  );
+}
+
+// ======================================================
+// LOG SYSTEM
+// ======================================================
+
+async function sendLog(
+  guild,
+  title,
+  description
+) {
+  try {
+    const channel =
+      await guild.channels.fetch(
+        SUPPORT_LOG_CHANNEL_ID
+      );
+
+    if (
+      !channel ||
+      !channel.isTextBased()
+    ) {
+      return;
+    }
+
+    const embed =
+      new EmbedBuilder()
+        .setTitle(title)
+        .setDescription(description)
+        .setTimestamp();
+
+    await channel.send({
+      embeds: [embed]
+    });
+
+  } catch (error) {
+    console.error(
+      "Log error:",
+      error.message
+    );
+  }
+}
+
+// ======================================================
+// SLASH COMMANDS
+// ======================================================
 
 const commands = [
 
   // TICKET
   new SlashCommandBuilder()
     .setName("ticket")
-    .setDescription("Create a support ticket from Discord or DM."),
+    .setDescription(
+      "Create a support ticket."
+    ),
 
   new SlashCommandBuilder()
     .setName("ticketpanel")
-    .setDescription("Send the DM ticket panel.")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    .setDescription(
+      "Send the support ticket panel."
+    )
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
+    ),
 
   new SlashCommandBuilder()
     .setName("ticketsetup")
-    .setDescription("Configure the ticket system.")
-    .addChannelOption(o =>
-      o.setName("category")
-        .setDescription("Ticket category")
-        .addChannelTypes(ChannelType.GuildCategory)
+    .setDescription(
+      "Configure the ticket category."
+    )
+    .addChannelOption(option =>
+      option
+        .setName("category")
+        .setDescription(
+          "Ticket category"
+        )
+        .addChannelTypes(
+          ChannelType.GuildCategory
+        )
         .setRequired(true)
     )
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
+    ),
 
   new SlashCommandBuilder()
     .setName("close")
-    .setDescription("Close the current ticket."),
+    .setDescription(
+      "Close the current ticket."
+    ),
 
   new SlashCommandBuilder()
     .setName("claim")
-    .setDescription("Claim the current ticket."),
+    .setDescription(
+      "Claim the current ticket."
+    ),
 
   new SlashCommandBuilder()
     .setName("unclaim")
-    .setDescription("Unclaim the current ticket."),
+    .setDescription(
+      "Unclaim the current ticket."
+    ),
 
   new SlashCommandBuilder()
     .setName("add")
-    .setDescription("Add a member to the ticket.")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member to add")
+    .setDescription(
+      "Add a member to the ticket."
+    )
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription(
+          "Member to add"
+        )
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName("remove")
-    .setDescription("Remove a member from the ticket.")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member to remove")
+    .setDescription(
+      "Remove a member from the ticket."
+    )
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription(
+          "Member to remove"
+        )
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName("transcript")
-    .setDescription("Create a transcript of the ticket."),
+    .setDescription(
+      "Create a ticket transcript."
+    ),
 
   new SlashCommandBuilder()
     .setName("ticketstats")
-    .setDescription("Show ticket statistics."),
+    .setDescription(
+      "Show ticket statistics."
+    ),
 
   // AUTOMOD
   new SlashCommandBuilder()
     .setName("automod")
-    .setDescription("AutoMod controls.")
-    .addSubcommand(s =>
-      s.setName("setup")
-        .setDescription("Enable AutoMod.")
+    .setDescription(
+      "AutoMod controls."
     )
-    .addSubcommand(s =>
-      s.setName("enable")
-        .setDescription("Enable AutoMod.")
+    .addSubcommand(sub =>
+      sub
+        .setName("enable")
+        .setDescription(
+          "Enable AutoMod."
+        )
     )
-    .addSubcommand(s =>
-      s.setName("disable")
-        .setDescription("Disable AutoMod.")
+    .addSubcommand(sub =>
+      sub
+        .setName("disable")
+        .setDescription(
+          "Disable AutoMod."
+        )
     )
-    .addSubcommand(s =>
-      s.setName("status")
-        .setDescription("Show AutoMod status.")
+    .addSubcommand(sub =>
+      sub
+        .setName("status")
+        .setDescription(
+          "Show AutoMod status."
+        )
     )
-    .addSubcommand(s =>
-      s.setName("config")
-        .setDescription("Configure AutoMod.")
-        .addIntegerOption(o =>
-          o.setName("spam_limit")
-            .setDescription("Messages allowed within 5 seconds")
+    .addSubcommand(sub =>
+      sub
+        .setName("config")
+        .setDescription(
+          "Configure AutoMod."
+        )
+        .addIntegerOption(option =>
+          option
+            .setName("spam_limit")
+            .setDescription(
+              "Messages allowed in 5 seconds"
+            )
             .setMinValue(3)
             .setMaxValue(20)
             .setRequired(false)
         )
-        .addIntegerOption(o =>
-          o.setName("timeout")
-            .setDescription("Timeout duration in seconds")
+        .addIntegerOption(option =>
+          option
+            .setName("timeout")
+            .setDescription(
+              "Timeout duration in seconds"
+            )
             .setMinValue(10)
             .setMaxValue(604800)
             .setRequired(false)
@@ -200,332 +331,299 @@ const commands = [
   // SECURITY
   new SlashCommandBuilder()
     .setName("security")
-    .setDescription("Security controls.")
-    .addSubcommand(s =>
-      s.setName("setup")
-        .setDescription("Enable security protection.")
+    .setDescription(
+      "Security controls."
     )
-    .addSubcommand(s =>
-      s.setName("enable")
-        .setDescription("Enable security.")
+    .addSubcommand(sub =>
+      sub
+        .setName("enable")
+        .setDescription(
+          "Enable security."
+        )
     )
-    .addSubcommand(s =>
-      s.setName("disable")
-        .setDescription("Disable security.")
+    .addSubcommand(sub =>
+      sub
+        .setName("disable")
+        .setDescription(
+          "Disable security."
+        )
     )
-    .addSubcommand(s =>
-      s.setName("status")
-        .setDescription("Show security status.")
+    .addSubcommand(sub =>
+      sub
+        .setName("status")
+        .setDescription(
+          "Show security status."
+        )
     ),
 
-  // ANNOUNCEMENTS
+  // ANNOUNCEMENT
   new SlashCommandBuilder()
     .setName("announce")
-    .setDescription("Announcement system.")
-    .addSubcommand(s =>
-      s.setName("send")
-        .setDescription("Send an announcement.")
-        .addChannelOption(o =>
-          o.setName("channel")
-            .setDescription("Announcement channel")
-            .addChannelTypes(ChannelType.GuildText)
+    .setDescription(
+      "Announcement system."
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("send")
+        .setDescription(
+          "Send an announcement."
+        )
+        .addChannelOption(option =>
+          option
+            .setName("channel")
+            .setDescription(
+              "Announcement channel"
+            )
+            .addChannelTypes(
+              ChannelType.GuildText
+            )
             .setRequired(true)
         )
-        .addStringOption(o =>
-          o.setName("message")
-            .setDescription("Announcement message")
+        .addStringOption(option =>
+          option
+            .setName("message")
+            .setDescription(
+              "Announcement message"
+            )
             .setRequired(true)
         )
     )
-    .addSubcommand(s =>
-      s.setName("embed")
-        .setDescription("Send an embed announcement.")
-        .addChannelOption(o =>
-          o.setName("channel")
-            .setDescription("Announcement channel")
-            .addChannelTypes(ChannelType.GuildText)
+    .addSubcommand(sub =>
+      sub
+        .setName("embed")
+        .setDescription(
+          "Send an embed announcement."
+        )
+        .addChannelOption(option =>
+          option
+            .setName("channel")
+            .setDescription(
+              "Announcement channel"
+            )
+            .addChannelTypes(
+              ChannelType.GuildText
+            )
             .setRequired(true)
         )
-        .addStringOption(o =>
-          o.setName("title")
-            .setDescription("Embed title")
+        .addStringOption(option =>
+          option
+            .setName("title")
+            .setDescription(
+              "Announcement title"
+            )
             .setRequired(true)
         )
-        .addStringOption(o =>
-          o.setName("message")
-            .setDescription("Embed description")
-            .setRequired(true)
-        )
-        .addStringOption(o =>
-          o.setName("color")
-            .setDescription("Hex color, example: #5865F2")
-            .setRequired(false)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("schedule")
-        .setDescription("Schedule an announcement.")
-        .addChannelOption(o =>
-          o.setName("channel")
-            .setDescription("Announcement channel")
-            .addChannelTypes(ChannelType.GuildText)
-            .setRequired(true)
-        )
-        .addStringOption(o =>
-          o.setName("message")
-            .setDescription("Announcement message")
-            .setRequired(true)
-        )
-        .addIntegerOption(o =>
-          o.setName("minutes")
-            .setDescription("Minutes from now")
-            .setMinValue(1)
-            .setMaxValue(10080)
+        .addStringOption(option =>
+          option
+            .setName("message")
+            .setDescription(
+              "Announcement message"
+            )
             .setRequired(true)
         )
     )
-    .addSubcommand(s =>
-      s.setName("list")
-        .setDescription("List scheduled announcements.")
-    )
-    .addSubcommand(s =>
-      s.setName("cancel")
-        .setDescription("Cancel a scheduled announcement.")
-        .addStringOption(o =>
-          o.setName("id")
-            .setDescription("Schedule ID")
-            .setRequired(true)
-        )
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
-].map(command => command.toJSON());
+].map(command =>
+  command.toJSON()
+);
 
-// ===============================
-// HELPERS
-// ===============================
-
-function isSupport(member) {
-  if (!member) return false;
-
-  return (
-    member.permissions?.has(PermissionFlagsBits.Administrator) ||
-    member.roles?.cache?.has(SUPPORT_ROLE_ID)
-  );
-}
-
-function getConfig() {
-  return readJSON(files.config, {});
-}
-
-function saveConfig(data) {
-  writeJSON(files.config, data);
-}
-
-function getGuildConfig(guildId) {
-  const data = getConfig();
-
-  if (!data[guildId]) {
-    data[guildId] = {
-      ticketCategory: null,
-      automod: {
-        enabled: true,
-        spamLimit: 6,
-        timeout: 60,
-        invites: true,
-        mentions: true,
-        duplicate: true
-      },
-      security: {
-        enabled: true,
-        antiRaid: true,
-        antiMassMention: true,
-        antiWebhook: true,
-        antiDangerousRoles: true
-      }
-    };
-
-    saveConfig(data);
-  }
-
-  return data[guildId];
-}
-
-function saveGuildConfig(guildId, config) {
-  const data = getConfig();
-  data[guildId] = config;
-  saveConfig(data);
-}
-
-async function sendLog(guild, title, description) {
-  try {
-    const channel = await guild.channels.fetch(SUPPORT_LOG_CHANNEL_ID);
-
-    if (!channel || !channel.isTextBased()) return;
-
-    const embed = new EmbedBuilder()
-      .setTitle(title)
-      .setDescription(description)
-      .setTimestamp();
-
-    await channel.send({ embeds: [embed] });
-  } catch (error) {
-    console.error("Log error:", error.message);
-  }
-}
-
-function getTicketByChannel(channelId) {
-  const tickets = readJSON(files.tickets, {});
-
-  for (const [userId, ticket] of Object.entries(tickets)) {
-    if (ticket.channelId === channelId) {
-      return { userId, ticket };
-    }
-  }
-
-  return null;
-}
-
-// ===============================
+// ======================================================
 // REGISTER COMMANDS
-// ===============================
+// ======================================================
 
 async function registerCommands() {
-  const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-  console.log("Registering slash commands...");
+  const rest =
+    new REST({
+      version: "10"
+    }).setToken(TOKEN);
 
-  await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: commands }
+  console.log(
+    "Registering slash commands..."
   );
 
-  console.log("Slash commands registered.");
+  await rest.put(
+    Routes.applicationGuildCommands(
+      CLIENT_ID,
+      GUILD_ID
+    ),
+    {
+      body: commands
+    }
+  );
+
+  console.log(
+    "Slash commands registered."
+  );
 }
 
-// ===============================
-// READY
-// ===============================
+// ======================================================
+// BOT READY
+// ======================================================
 
-client.once("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}`);
+client.once(
+  "clientReady",
+  async () => {
 
-  try {
-    await registerCommands();
-  } catch (error) {
-    console.error("Command registration error:", error);
+    console.log(
+      `Logged in as ${client.user.tag}`
+    );
+
+    try {
+
+      await registerCommands();
+
+    } catch (error) {
+
+      console.error(
+        "Command registration error:",
+        error
+      );
+    }
+
+    console.log(
+      "DM Ticket + AutoMod + Security + Announcement Bot is online."
+    );
   }
+);
 
-  console.log("DM Ticket + AutoMod + Security + Announcement Bot is online.");
-});
-
-// ===============================
-// DM TICKET SYSTEM
-// ===============================
+// ======================================================
+// CREATE TICKET
+// ======================================================
 
 async function createTicket(user) {
-  const guild = await client.guilds.fetch(GUILD_ID);
-  const member = await guild.members.fetch(user.id).catch(() => null);
 
-  const tickets = readJSON(files.tickets, {});
+  const guild =
+    await client.guilds.fetch(
+      GUILD_ID
+    );
 
-  if (tickets[user.id]) {
-    const oldChannel = await guild.channels
-      .fetch(tickets[user.id].channelId)
-      .catch(() => null);
+  // Already has ticket
+  if (tickets.has(user.id)) {
+
+    const oldTicket =
+      tickets.get(user.id);
+
+    const oldChannel =
+      await guild.channels
+        .fetch(oldTicket.channelId)
+        .catch(() => null);
 
     if (oldChannel) {
       return oldChannel;
     }
 
-    delete tickets[user.id];
-    writeJSON(files.tickets, tickets);
+    tickets.delete(user.id);
   }
 
-  const config = getGuildConfig(GUILD_ID);
+  let category = null;
 
-  const category = config.ticketCategory
-    ? await guild.channels.fetch(config.ticketCategory).catch(() => null)
-    : null;
+  if (ticketCategoryId) {
 
-  const channelName =
-    `ticket-${user.username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 15)}-${user.id.slice(-4)}`;
+    category =
+      await guild.channels
+        .fetch(ticketCategoryId)
+        .catch(() => null);
+  }
 
-  const permissionOverwrites = [
-    {
-      id: guild.roles.everyone.id,
-      deny: [PermissionFlagsBits.ViewChannel]
-    },
-    {
-      id: SUPPORT_ROLE_ID,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory
-      ]
-    }
-  ];
+  const username =
+    user.username
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "")
+      .slice(0, 15) ||
+    "user";
 
-  if (member) {
-    permissionOverwrites.push({
-      id: user.id,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory
+  const channel =
+    await guild.channels.create({
+      name: `ticket-${username}`,
+
+      type: ChannelType.GuildText,
+
+      parent:
+        category?.type ===
+        ChannelType.GuildCategory
+          ? category.id
+          : undefined,
+
+      permissionOverwrites: [
+
+        {
+          id: guild.roles.everyone.id,
+
+          deny: [
+            PermissionFlagsBits.ViewChannel
+          ]
+        },
+
+        {
+          id: SUPPORT_ROLE_ID,
+
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory
+          ]
+        }
+
       ]
     });
-  }
 
-  const channel = await guild.channels.create({
-    name: channelName,
-    type: ChannelType.GuildText,
-    parent: category?.type === ChannelType.GuildCategory ? category.id : undefined,
-    permissionOverwrites
-  });
-
-  tickets[user.id] = {
-    channelId: channel.id,
-    createdAt: Date.now(),
-    claimedBy: null
-  };
-
-  writeJSON(files.tickets, tickets);
-
-  const embed = new EmbedBuilder()
-    .setTitle("🎫 Support Ticket")
-    .setDescription(
-      `Hello <@${user.id}>!\n\n` +
-      `Your support ticket has been created.\n` +
-      `A support member will assist you shortly.\n\n` +
-      `You can continue replying to the bot DM while your ticket is open.`
-    )
-    .setTimestamp();
-
-  const buttons = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("ticket_close")
-      .setLabel("Close Ticket")
-      .setStyle(ButtonStyle.Danger)
+  tickets.set(
+    user.id,
+    {
+      channelId: channel.id,
+      claimedBy: null,
+      createdAt: Date.now()
+    }
   );
 
+  const embed =
+    new EmbedBuilder()
+      .setTitle(
+        "🎫 Support Ticket"
+      )
+      .setDescription(
+        `User: <@${user.id}>\n\n` +
+        "A new support ticket has been created.\n" +
+        "Staff can reply to the user from this channel."
+      )
+      .setTimestamp();
+
+  const row =
+    new ActionRowBuilder()
+      .addComponents(
+
+        new ButtonBuilder()
+          .setCustomId(
+            "close_ticket"
+          )
+          .setLabel(
+            "Close Ticket"
+          )
+          .setEmoji("🔒")
+          .setStyle(
+            ButtonStyle.Danger
+          )
+
+      );
+
   await channel.send({
-    content: `<@&${SUPPORT_ROLE_ID}>`,
-    embeds: [embed],
-    components: [buttons]
+
+    content:
+      `<@&${SUPPORT_ROLE_ID}>`,
+
+    embeds: [
+      embed
+    ],
+
+    components: [
+      row
+    ]
   });
 
-  await user.send({
-    embeds: [
-      new EmbedBuilder()
-        .setTitle("🎫 Ticket Created")
-        .setDescription(
-          "Your support ticket has been created successfully.\n\n" +
-          "Send your messages here and our support team will receive them."
-        )
-        .setTimestamp()
-    ]
-  }).catch(() => {});
+  await user.send(
+    "🎫 Your support ticket has been created. Please send your message here."
+  ).catch(() => {});
 
   await sendLog(
     guild,
@@ -536,189 +634,298 @@ async function createTicket(user) {
   return channel;
 }
 
-// ===============================
-// DM MESSAGE HANDLER
-// ===============================
+// ======================================================
+// MESSAGE HANDLER
+// ======================================================
 
-client.on("messageCreate", async message => {
-  try {
-    if (message.author.bot) return;
+client.on(
+  "messageCreate",
+  async message => {
 
-    // DM MESSAGE
-    if (!message.guild) {
-      const tickets = readJSON(files.tickets, {});
-      const ticket = tickets[message.author.id];
+    if (message.author.bot)
+      return;
 
-      if (!ticket) {
-        const channel = await createTicket(message.author);
+    try {
+
+      // ==================================================
+      // DM FROM USER
+      // ==================================================
+
+      if (!message.guild) {
+
+        let ticket =
+          tickets.get(
+            message.author.id
+          );
+
+        if (!ticket) {
+
+          const channel =
+            await createTicket(
+              message.author
+            );
+
+          await channel.send(
+            `📩 **${message.author.tag}:**\n` +
+            `${message.content || "[Attachment]"}`
+          );
+
+          return;
+        }
+
+        const channel =
+          await client.channels
+            .fetch(
+              ticket.channelId
+            )
+            .catch(() => null);
+
+        if (!channel) {
+
+          tickets.delete(
+            message.author.id
+          );
+
+          const newChannel =
+            await createTicket(
+              message.author
+            );
+
+          await newChannel.send(
+            `📩 **${message.author.tag}:**\n` +
+            `${message.content || "[Attachment]"}`
+          );
+
+          return;
+        }
+
         await channel.send(
-          `**New message from ${message.author.tag}:**\n${message.content || "[Attachment]"}`
-        );
-        return;
-      }
-
-      const channel = await client.channels
-        .fetch(ticket.channelId)
-        .catch(() => null);
-
-      if (!channel) {
-        delete tickets[message.author.id];
-        writeJSON(files.tickets, tickets);
-
-        const newChannel = await createTicket(message.author);
-
-        await newChannel.send(
-          `**New message from ${message.author.tag}:**\n${message.content || "[Attachment]"}`
+          `📩 **${message.author.tag}:**\n` +
+          `${message.content || "[Attachment]"}`
         );
 
         return;
       }
 
-      await channel.send(
-        `**${message.author.tag}:**\n${message.content || "[Attachment]"}`
+      // ==================================================
+      // SERVER AUTOMOD
+      // ==================================================
+
+      await runAutoMod(
+        message
       );
 
+    } catch (error) {
+
+      console.error(
+        "Message handler error:",
+        error
+      );
+    }
+  }
+);
+
+// ======================================================
+// STAFF MESSAGE -> USER DM
+// ======================================================
+
+client.on(
+  "messageCreate",
+  async message => {
+
+    if (
+      message.author.bot ||
+      !message.guild
+    ) {
       return;
     }
 
-    // GUILD AUTOMOD
-    await handleAutoMod(message);
+    try {
 
-  } catch (error) {
-    console.error("Message error:", error);
+      let userId = null;
+
+      for (
+        const [id, ticket]
+        of tickets
+      ) {
+
+        if (
+          ticket.channelId ===
+          message.channel.id
+        ) {
+
+          userId = id;
+          break;
+        }
+      }
+
+      if (!userId)
+        return;
+
+      if (
+        !isStaff(
+          message.member
+        )
+      ) {
+        return;
+      }
+
+      const user =
+        await client.users
+          .fetch(userId)
+          .catch(() => null);
+
+      if (!user)
+        return;
+
+      await user.send(
+        `💬 **Support — ${message.author.tag}:**\n` +
+        `${message.content || "[Attachment]"}`
+      ).catch(() => {});
+
+    } catch (error) {
+
+      console.error(
+        "Staff reply error:",
+        error
+      );
+    }
   }
-});
+);
 
-// ===============================
-// STAFF REPLY -> USER DM
-// ===============================
-
-client.on("messageCreate", async message => {
-  try {
-    if (!message.guild || message.author.bot) return;
-
-    const ticketInfo = getTicketByChannel(message.channel.id);
-
-    if (!ticketInfo) return;
-
-    if (!isSupport(message.member)) return;
-
-    const user = await client.users
-      .fetch(ticketInfo.userId)
-      .catch(() => null);
-
-    if (!user) return;
-
-    await user.send(
-      `**Support — ${message.author.tag}:**\n${message.content || "[Attachment]"}`
-    ).catch(() => {});
-  } catch (error) {
-    console.error("Ticket DM error:", error);
-  }
-});
-
-// ===============================
+// ======================================================
 // AUTOMOD
-// ===============================
+// ======================================================
 
-const spamMap = new Map();
+async function runAutoMod(message) {
 
-async function handleAutoMod(message) {
-  if (!message.guild || message.author.bot) return;
-
-  const config = getGuildConfig(message.guild.id);
-
-  if (!config.automod?.enabled) return;
-
-  // Don't moderate administrators/support
   if (
-    message.member.permissions.has(PermissionFlagsBits.Administrator) ||
-    message.member.roles.cache.has(SUPPORT_ROLE_ID)
+    !message.guild ||
+    !botConfig.automod
   ) {
     return;
   }
 
-  const content = message.content || "";
-
-  // INVITE FILTER
   if (
-    config.automod.invites &&
-    /(discord\.gg\/|discord\.com\/invite\/)/i.test(content)
+    message.member?.permissions.has(
+      PermissionFlagsBits.Administrator
+    ) ||
+    message.member?.roles.cache.has(
+      SUPPORT_ROLE_ID
+    )
   ) {
-    await message.delete().catch(() => {});
+    return;
+  }
 
-    await warnUser(
+  const content =
+    message.content || "";
+
+  // ==================================================
+  // DISCORD INVITES
+  // ==================================================
+
+  if (
+    /discord\.gg\/|discord\.com\/invite\//i
+      .test(content)
+  ) {
+
+    await message.delete()
+      .catch(() => {});
+
+    await punish(
       message.member,
-      "Discord invite link",
-      config.automod.timeout
+      "Discord invite link"
     );
 
     return;
   }
 
+  // ==================================================
   // MASS MENTION
-  if (
-    config.automod.mentions &&
-    (message.mentions.everyone ||
-      message.mentions.users.size >= 5 ||
-      message.mentions.roles.size >= 5)
-  ) {
-    await message.delete().catch(() => {});
+  // ==================================================
 
-    await warnUser(
+  if (
+    message.mentions.everyone ||
+    message.mentions.users.size >= 5 ||
+    message.mentions.roles.size >= 5
+  ) {
+
+    await message.delete()
+      .catch(() => {});
+
+    await punish(
       message.member,
-      "Mass mention",
-      config.automod.timeout
+      "Mass mention"
     );
 
     return;
   }
 
+  // ==================================================
   // SPAM
-  const now = Date.now();
+  // ==================================================
 
-  if (!spamMap.has(message.author.id)) {
-    spamMap.set(message.author.id, []);
-  }
+  const now =
+    Date.now();
 
-  const timestamps = spamMap.get(message.author.id);
+  const previous =
+    spamTracker.get(
+      message.author.id
+    ) || [];
 
-  timestamps.push(now);
+  const recent =
+    previous.filter(
+      time =>
+        now - time < 5000
+    );
 
-  const recent = timestamps.filter(t => now - t <= 5000);
+  recent.push(now);
 
-  spamMap.set(message.author.id, recent);
+  spamTracker.set(
+    message.author.id,
+    recent
+  );
 
-  if (recent.length >= config.automod.spamLimit) {
-    spamMap.set(message.author.id, []);
+  if (
+    recent.length >=
+    botConfig.spamLimit
+  ) {
 
-    await message.delete().catch(() => {});
+    spamTracker.set(
+      message.author.id,
+      []
+    );
 
-    await warnUser(
+    await message.delete()
+      .catch(() => {});
+
+    await punish(
       message.member,
-      "Spam/flood",
-      config.automod.timeout
+      "Spam/flood"
     );
   }
 }
 
-async function warnUser(member, reason, timeoutSeconds) {
-  const warnings = readJSON(files.warnings, {});
+// ======================================================
+// AUTOMOD PUNISH
+// ======================================================
 
-  if (!warnings[member.id]) {
-    warnings[member.id] = [];
-  }
+async function punish(
+  member,
+  reason
+) {
 
-  warnings[member.id].push({
-    reason,
-    time: Date.now()
-  });
+  if (!member)
+    return;
 
-  writeJSON(files.warnings, warnings);
+  if (
+    member.moderatable
+  ) {
 
-  if (member.moderatable) {
     await member.timeout(
-      timeoutSeconds * 1000,
+      botConfig.timeoutSeconds *
+      1000,
+
       `AutoMod: ${reason}`
     ).catch(() => {});
   }
@@ -726,783 +933,961 @@ async function warnUser(member, reason, timeoutSeconds) {
   await sendLog(
     member.guild,
     "🛡️ AutoMod Action",
-    `User: <@${member.id}>\nReason: ${reason}\nTimeout: ${timeoutSeconds}s`
+
+    `User: <@${member.id}>\n` +
+    `Reason: ${reason}\n` +
+    `Timeout: ${botConfig.timeoutSeconds}s`
   );
 }
 
-// ===============================
-// SECURITY
-// ===============================
+// ======================================================
+// SECURITY / ANTI RAID
+// ======================================================
 
-const joinTracker = new Map();
+client.on(
+  "guildMemberAdd",
+  async member => {
 
-client.on("guildMemberAdd", async member => {
-  try {
-    if (member.guild.id !== GUILD_ID) return;
-
-    const config = getGuildConfig(member.guild.id);
-
-    if (!config.security?.enabled) return;
-    if (!config.security.antiRaid) return;
-
-    const now = Date.now();
-
-    if (!joinTracker.has(member.guild.id)) {
-      joinTracker.set(member.guild.id, []);
+    if (
+      member.guild.id !==
+      GUILD_ID
+    ) {
+      return;
     }
 
-    const joins = joinTracker.get(member.guild.id);
+    if (
+      !botConfig.security
+    ) {
+      return;
+    }
 
-    joins.push(now);
+    const now =
+      Date.now();
 
-    const recent = joins.filter(t => now - t <= 10000);
+    recentJoins =
+      recentJoins.filter(
+        time =>
+          now - time < 10000
+      );
 
-    joinTracker.set(member.guild.id, recent);
+    recentJoins.push(
+      now
+    );
 
-    if (recent.length >= 10) {
+    if (
+      recentJoins.length >=
+      10
+    ) {
+
       await sendLog(
         member.guild,
-        "🚨 Possible Raid Detected",
-        `10 or more members joined within approximately 10 seconds.`
+
+        "🚨 SECURITY ALERT",
+
+        "Possible raid detected: 10 or more members joined within 10 seconds."
       );
+
+      recentJoins = [];
     }
-  } catch (error) {
-    console.error("Security join error:", error);
   }
-});
+);
 
-// Role/channel/webhook/bot changes are logged through audit-log events.
+// ======================================================
+// INTERACTIONS
+// ======================================================
 
-client.on("guildAuditLogEntryCreate", async (entry, guild) => {
-  try {
-    if (guild.id !== GUILD_ID) return;
+client.on(
+  "interactionCreate",
+  async interaction => {
 
-    const config = getGuildConfig(guild.id);
+    try {
 
-    if (!config.security?.enabled) return;
+      // ==================================================
+      // CLOSE BUTTON
+      // ==================================================
 
-    const dangerousActions = [
-      10, // CHANNEL_CREATE
-      11, // CHANNEL_UPDATE
-      12, // CHANNEL_DELETE
-      30, // ROLE_CREATE
-      31, // ROLE_UPDATE
-      32, // ROLE_DELETE
-      50, // BOT_ADD
-      52, // WEBHOOK_CREATE
-      53, // WEBHOOK_UPDATE
-      54  // WEBHOOK_DELETE
-    ];
+      if (
+        interaction.isButton()
+      ) {
 
-    if (dangerousActions.includes(entry.action)) {
-      await sendLog(
-        guild,
-        "🔐 Security Alert",
-        `Action: \`${entry.action}\`\nExecutor: <@${entry.executorId || "Unknown"}>\nTarget: ${entry.targetId || "Unknown"}`
-      );
-    }
-  } catch (error) {
-    console.error("Security audit error:", error);
-  }
-});
-
-// ===============================
-// SLASH COMMANDS
-// ===============================
-
-client.on("interactionCreate", async interaction => {
-  try {
-
-    // BUTTONS
-    if (interaction.isButton()) {
-
-      if (interaction.customId === "ticket_close") {
-        const info = getTicketByChannel(interaction.channel.id);
-
-        if (!info) {
-          return interaction.reply({
-            content: "This is not an active ticket.",
-            ephemeral: true
-          });
+        if (
+          interaction.customId !==
+          "close_ticket"
+        ) {
+          return;
         }
 
-        if (!isSupport(interaction.member)) {
-          return interaction.reply({
-            content: "You don't have permission to close this ticket.",
+        if (
+          !isStaff(
+            interaction.member
+          )
+        ) {
+
+          await interaction.reply({
+            content:
+              "❌ You don't have permission.",
             ephemeral: true
           });
+
+          return;
         }
 
-        await interaction.reply("Closing ticket...");
+        let userId = null;
 
-        const tickets = readJSON(files.tickets, {});
-        delete tickets[info.userId];
-        writeJSON(files.tickets, tickets);
+        for (
+          const [id, ticket]
+          of tickets
+        ) {
 
-        const user = await client.users
-          .fetch(info.userId)
-          .catch(() => null);
+          if (
+            ticket.channelId ===
+            interaction.channel.id
+          ) {
+
+            userId = id;
+            break;
+          }
+        }
+
+        if (!userId) {
+
+          await interaction.reply({
+            content:
+              "❌ This is not an active ticket.",
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        tickets.delete(
+          userId
+        );
+
+        const user =
+          await client.users
+            .fetch(userId)
+            .catch(() => null);
 
         if (user) {
+
           await user.send(
-            "🎫 Your support ticket has been closed. You can DM me again to create a new ticket."
+            "🔒 Your support ticket has been closed."
           ).catch(() => {});
         }
 
+        await interaction.reply(
+          "🔒 Closing ticket..."
+        );
+
         await sendLog(
           interaction.guild,
+
           "🎫 Ticket Closed",
-          `User: <@${info.userId}>\nClosed by: ${interaction.user}`
+
+          `User: <@${userId}>\n` +
+          `Closed by: ${interaction.user}`
         );
 
         setTimeout(() => {
-          interaction.channel.delete().catch(() => {});
+
+          interaction.channel
+            .delete()
+            .catch(() => {});
+
         }, 1500);
 
         return;
       }
-    }
 
-    if (!interaction.isChatInputCommand()) return;
+      // ==================================================
+      // SLASH COMMANDS
+      // ==================================================
 
-    const command = interaction.commandName;
-
-    // ===========================
-    // TICKET
-    // ===========================
-
-    if (command === "ticket") {
-      if (!interaction.guild) {
-        await interaction.reply("Please DM the bot to create a ticket.");
+      if (
+        !interaction.isChatInputCommand()
+      ) {
         return;
       }
 
-      const channel = await createTicket(interaction.user);
+      // ==================================================
+      // /ticket
+      // ==================================================
 
-      await interaction.reply({
-        content: `Your ticket is ready: ${channel}`,
-        ephemeral: true
-      });
+      if (
+        interaction.commandName ===
+        "ticket"
+      ) {
 
-      return;
-    }
-
-    if (command === "ticketpanel") {
-      if (!isSupport(interaction.member)) {
-        return interaction.reply({
-          content: "You don't have permission.",
-          ephemeral: true
-        });
-      }
-
-      const embed = new EmbedBuilder()
-        .setTitle("🎫 Support Center")
-        .setDescription(
-          "Need help?\n\n" +
-          "Send a **DM to this bot** to automatically create a private support ticket.\n\n" +
-          "Our support team will receive your message."
-        )
-        .setTimestamp();
-
-      await interaction.channel.send({
-        embeds: [embed]
-      });
-
-      await interaction.reply({
-        content: "Ticket panel sent.",
-        ephemeral: true
-      });
-
-      return;
-    }
-
-    if (command === "ticketsetup") {
-      if (!isSupport(interaction.member)) {
-        return interaction.reply({
-          content: "You don't have permission.",
-          ephemeral: true
-        });
-      }
-
-      const category = interaction.options.getChannel("category");
-
-      const config = getGuildConfig(interaction.guild.id);
-      config.ticketCategory = category.id;
-
-      saveGuildConfig(interaction.guild.id, config);
-
-      await interaction.reply(
-        `✅ Ticket category set to ${category}.`
-      );
-
-      return;
-    }
-
-    // ===========================
-    // TICKET MANAGEMENT
-    // ===========================
-
-    if (
-      ["close", "claim", "unclaim", "add", "remove", "transcript"]
-        .includes(command)
-    ) {
-      if (!interaction.guild) return;
-
-      const info = getTicketByChannel(interaction.channel.id);
-
-      if (!info) {
-        return interaction.reply({
-          content: "This channel is not an active ticket.",
-          ephemeral: true
-        });
-      }
-
-      if (!isSupport(interaction.member)) {
-        return interaction.reply({
-          content: "You don't have permission.",
-          ephemeral: true
-        });
-      }
-
-      if (command === "claim") {
-        const tickets = readJSON(files.tickets, {});
-        tickets[info.userId].claimedBy = interaction.user.id;
-        writeJSON(files.tickets, tickets);
-
-        await interaction.reply(
-          `✅ Ticket claimed by ${interaction.user}.`
-        );
-
-        return;
-      }
-
-      if (command === "unclaim") {
-        const tickets = readJSON(files.tickets, {});
-        tickets[info.userId].claimedBy = null;
-        writeJSON(files.tickets, tickets);
-
-        await interaction.reply("✅ Ticket unclaimed.");
-        return;
-      }
-
-      if (command === "add") {
-        const user = interaction.options.getUser("user");
-
-        await interaction.channel.permissionOverwrites.edit(
-          user.id,
-          {
-            ViewChannel: true,
-            SendMessages: true,
-            ReadMessageHistory: true
-          }
-        );
-
-        await interaction.reply(
-          `✅ Added ${user} to the ticket.`
-        );
-
-        return;
-      }
-
-      if (command === "remove") {
-        const user = interaction.options.getUser("user");
-
-        await interaction.channel.permissionOverwrites.delete(
-          user.id
-        ).catch(() => {});
-
-        await interaction.reply(
-          `✅ Removed ${user} from the ticket.`
-        );
-
-        return;
-      }
-
-      if (command === "transcript") {
-        const messages = await interaction.channel.messages.fetch({
-          limit: 100
-        });
-
-        const sorted = [...messages.values()].reverse();
-
-        let transcript =
-          `Ticket Transcript\n` +
-          `Channel: ${interaction.channel.name}\n` +
-          `Created: ${new Date().toISOString()}\n\n`;
-
-        for (const msg of sorted) {
-          transcript +=
-            `[${msg.createdAt.toISOString()}] ` +
-            `${msg.author.tag}: ` +
-            `${msg.content || "[Attachment]"}\n`;
-        }
-
-        const transcriptFile = path.join(
-          dataDir,
-          `transcript-${interaction.channel.id}.txt`
-        );
-
-        fs.writeFileSync(transcriptFile, transcript);
-
-        await interaction.reply({
-          content: "📄 Transcript created.",
-          files: [transcriptFile]
-        });
-
-        return;
-      }
-
-      if (command === "close") {
-        await interaction.reply("Closing ticket...");
-
-        const tickets = readJSON(files.tickets, {});
-        delete tickets[info.userId];
-        writeJSON(files.tickets, tickets);
-
-        const user = await client.users
-          .fetch(info.userId)
-          .catch(() => null);
-
-        if (user) {
-          await user.send(
-            "🎫 Your support ticket has been closed."
-          ).catch(() => {});
-        }
-
-        await sendLog(
-          interaction.guild,
-          "🎫 Ticket Closed",
-          `User: <@${info.userId}>\nClosed by: ${interaction.user}`
-        );
-
-        setTimeout(() => {
-          interaction.channel.delete().catch(() => {});
-        }, 1000);
-
-        return;
-      }
-    }
-
-    if (command === "ticketstats") {
-      if (!isSupport(interaction.member)) {
-        return interaction.reply({
-          content: "You don't have permission.",
-          ephemeral: true
-        });
-      }
-
-      const tickets = readJSON(files.tickets, {});
-      const count = Object.keys(tickets).length;
-
-      const claimed = Object.values(tickets)
-        .filter(t => t.claimedBy).length;
-
-      const embed = new EmbedBuilder()
-        .setTitle("🎫 Ticket Statistics")
-        .addFields(
-          {
-            name: "Open Tickets",
-            value: String(count),
-            inline: true
-          },
-          {
-            name: "Claimed",
-            value: String(claimed),
-            inline: true
-          },
-          {
-            name: "Unclaimed",
-            value: String(count - claimed),
-            inline: true
-          }
-        )
-        .setTimestamp();
-
-      await interaction.reply({ embeds: [embed] });
-      return;
-    }
-
-    // ===========================
-    // AUTOMOD COMMANDS
-    // ===========================
-
-    if (command === "automod") {
-      if (!isSupport(interaction.member)) {
-        return interaction.reply({
-          content: "You don't have permission.",
-          ephemeral: true
-        });
-      }
-
-      const sub = interaction.options.getSubcommand();
-      const config = getGuildConfig(interaction.guild.id);
-
-      if (sub === "setup" || sub === "enable") {
-        config.automod.enabled = true;
-        saveGuildConfig(interaction.guild.id, config);
-
-        await interaction.reply("🛡️ AutoMod enabled.");
-        return;
-      }
-
-      if (sub === "disable") {
-        config.automod.enabled = false;
-        saveGuildConfig(interaction.guild.id, config);
-
-        await interaction.reply("🛡️ AutoMod disabled.");
-        return;
-      }
-
-      if (sub === "status") {
-        const a = config.automod;
-
-        const embed = new EmbedBuilder()
-          .setTitle("🛡️ AutoMod Status")
-          .addFields(
-            {
-              name: "Enabled",
-              value: a.enabled ? "Yes" : "No",
-              inline: true
-            },
-            {
-              name: "Spam Limit",
-              value: String(a.spamLimit),
-              inline: true
-            },
-            {
-              name: "Timeout",
-              value: `${a.timeout}s`,
-              inline: true
-            },
-            {
-              name: "Invite Filter",
-              value: a.invites ? "Enabled" : "Disabled",
-              inline: true
-            },
-            {
-              name: "Mention Protection",
-              value: a.mentions ? "Enabled" : "Disabled",
-              inline: true
-            }
+        const channel =
+          await createTicket(
+            interaction.user
           );
-
-        await interaction.reply({ embeds: [embed] });
-        return;
-      }
-
-      if (sub === "config") {
-        const spam = interaction.options.getInteger("spam_limit");
-        const timeout = interaction.options.getInteger("timeout");
-
-        if (spam !== null) config.automod.spamLimit = spam;
-        if (timeout !== null) config.automod.timeout = timeout;
-
-        saveGuildConfig(interaction.guild.id, config);
-
-        await interaction.reply("✅ AutoMod configuration updated.");
-        return;
-      }
-    }
-
-    // ===========================
-    // SECURITY COMMANDS
-    // ===========================
-
-    if (command === "security") {
-      if (!isSupport(interaction.member)) {
-        return interaction.reply({
-          content: "You don't have permission.",
-          ephemeral: true
-        });
-      }
-
-      const sub = interaction.options.getSubcommand();
-      const config = getGuildConfig(interaction.guild.id);
-
-      if (sub === "setup" || sub === "enable") {
-        config.security.enabled = true;
-        saveGuildConfig(interaction.guild.id, config);
-
-        await interaction.reply("🔐 Security system enabled.");
-        return;
-      }
-
-      if (sub === "disable") {
-        config.security.enabled = false;
-        saveGuildConfig(interaction.guild.id, config);
-
-        await interaction.reply("🔐 Security system disabled.");
-        return;
-      }
-
-      if (sub === "status") {
-        const s = config.security;
-
-        const embed = new EmbedBuilder()
-          .setTitle("🔐 Security Status")
-          .addFields(
-            {
-              name: "Enabled",
-              value: s.enabled ? "Yes" : "No",
-              inline: true
-            },
-            {
-              name: "Anti-Raid",
-              value: s.antiRaid ? "Enabled" : "Disabled",
-              inline: true
-            },
-            {
-              name: "Mass Mention",
-              value: s.antiMassMention ? "Enabled" : "Disabled",
-              inline: true
-            },
-            {
-              name: "Webhook Protection",
-              value: s.antiWebhook ? "Enabled" : "Disabled",
-              inline: true
-            }
-          );
-
-        await interaction.reply({ embeds: [embed] });
-        return;
-      }
-    }
-
-    // ===========================
-    // ANNOUNCEMENTS
-    // ===========================
-
-    if (command === "announce") {
-      if (!isSupport(interaction.member)) {
-        return interaction.reply({
-          content: "You don't have permission.",
-          ephemeral: true
-        });
-      }
-
-      const sub = interaction.options.getSubcommand();
-
-      if (sub === "send") {
-        const channel = interaction.options.getChannel("channel");
-        const message = interaction.options.getString("message");
-
-        await channel.send({
-          content: message,
-          allowedMentions: {
-            parse: ["users", "roles"]
-          }
-        });
-
-        await interaction.reply({
-          content: `📢 Announcement sent to ${channel}.`,
-          ephemeral: true
-        });
-
-        await sendLog(
-          interaction.guild,
-          "📢 Announcement Sent",
-          `Channel: ${channel}\nBy: ${interaction.user}`
-        );
-
-        return;
-      }
-
-      if (sub === "embed") {
-        const channel = interaction.options.getChannel("channel");
-        const title = interaction.options.getString("title");
-        const message = interaction.options.getString("message");
-        const color =
-          interaction.options.getString("color") || "#5865F2";
-
-        const embed = new EmbedBuilder()
-          .setTitle(title)
-          .setDescription(message)
-          .setColor(color)
-          .setFooter({
-            text: `Announcement by ${interaction.user.tag}`
-          })
-          .setTimestamp();
-
-        await channel.send({
-          embeds: [embed]
-        });
-
-        await interaction.reply({
-          content: `📢 Embed announcement sent to ${channel}.`,
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      if (sub === "schedule") {
-        const channel = interaction.options.getChannel("channel");
-        const message = interaction.options.getString("message");
-        const minutes = interaction.options.getInteger("minutes");
-
-        const schedules = readJSON(files.schedules, []);
-
-        const id =
-          Date.now().toString(36) +
-          Math.random().toString(36).slice(2, 6);
-
-        schedules.push({
-          id,
-          guildId: interaction.guild.id,
-          channelId: channel.id,
-          message,
-          executeAt: Date.now() + minutes * 60000,
-          createdBy: interaction.user.id
-        });
-
-        writeJSON(files.schedules, schedules);
 
         await interaction.reply({
           content:
-            `✅ Announcement scheduled.\n` +
-            `ID: \`${id}\`\n` +
-            `Time: ${minutes} minute(s) from now.`,
+            `🎫 Ticket created: ${channel}`,
           ephemeral: true
         });
 
         return;
       }
 
-      if (sub === "list") {
-        const schedules = readJSON(files.schedules, [])
-          .filter(s => s.guildId === interaction.guild.id);
+      // ==================================================
+      // /ticketpanel
+      // ==================================================
 
-        if (!schedules.length) {
-          await interaction.reply("No scheduled announcements.");
-          return;
-        }
+      if (
+        interaction.commandName ===
+        "ticketpanel"
+      ) {
 
-        const text = schedules
-          .map(
-            s =>
-              `\`${s.id}\` — <#${s.channelId}> — <t:${Math.floor(
-                s.executeAt / 1000
-              )}:R>`
+        if (
+          !isStaff(
+            interaction.member
           )
-          .join("\n");
+        ) {
 
-        await interaction.reply({
-          content: `📢 Scheduled announcements:\n${text}`,
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      if (sub === "cancel") {
-        const id = interaction.options.getString("id");
-
-        const schedules = readJSON(files.schedules, []);
-
-        const index = schedules.findIndex(
-          s =>
-            s.id === id &&
-            s.guildId === interaction.guild.id
-        );
-
-        if (index === -1) {
           await interaction.reply({
-            content: "Schedule not found.",
+            content:
+              "❌ You don't have permission.",
             ephemeral: true
           });
+
           return;
         }
 
-        schedules.splice(index, 1);
-        writeJSON(files.schedules, schedules);
+        const embed =
+          new EmbedBuilder()
+            .setTitle(
+              "🎫 Support Center"
+            )
+            .setDescription(
+              "Need help?\n\n" +
+              "Send a DM to this bot to create a private support ticket.\n\n" +
+              "Our support team will assist you."
+            )
+            .setTimestamp();
+
+        await interaction.channel.send({
+          embeds: [
+            embed
+          ]
+        });
 
         await interaction.reply({
-          content: "✅ Scheduled announcement cancelled.",
+          content:
+            "✅ Ticket panel sent.",
           ephemeral: true
         });
 
         return;
       }
-    }
 
-  } catch (error) {
-    console.error("Interaction error:", error);
+      // ==================================================
+      // /ticketsetup
+      // ==================================================
 
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: "An unexpected error occurred.",
-        ephemeral: true
-      }).catch(() => {});
-    }
-  }
-});
+      if (
+        interaction.commandName ===
+        "ticketsetup"
+      ) {
 
-// ===============================
-// SCHEDULED ANNOUNCEMENTS
-// ===============================
+        if (
+          !isStaff(
+            interaction.member
+          )
+        ) {
 
-setInterval(async () => {
-  try {
-    const schedules = readJSON(files.schedules, []);
-    const now = Date.now();
+          await interaction.reply({
+            content:
+              "❌ You don't have permission.",
+            ephemeral: true
+          });
 
-    const due = schedules.filter(
-      schedule => schedule.executeAt <= now
-    );
+          return;
+        }
 
-    const remaining = schedules.filter(
-      schedule => schedule.executeAt > now
-    );
+        const category =
+          interaction.options.getChannel(
+            "category"
+          );
 
-    writeJSON(files.schedules, remaining);
+        ticketCategoryId =
+          category.id;
 
-    for (const schedule of due) {
-      try {
-        const channel = await client.channels
-          .fetch(schedule.channelId)
-          .catch(() => null);
+        await interaction.reply(
+          `✅ Ticket category set to ${category}.`
+        );
 
-        if (!channel || !channel.isTextBased()) continue;
+        return;
+      }
 
-        await channel.send({
-          content: schedule.message
+      // ==================================================
+      // /ticketstats
+      // ==================================================
+
+      if (
+        interaction.commandName ===
+        "ticketstats"
+      ) {
+
+        if (
+          !isStaff(
+            interaction.member
+          )
+        ) {
+
+          await interaction.reply({
+            content:
+              "❌ You don't have permission.",
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        const open =
+          tickets.size;
+
+        const claimed =
+          [
+            ...tickets.values()
+          ].filter(
+            ticket =>
+              ticket.claimedBy
+          ).length;
+
+        const embed =
+          new EmbedBuilder()
+            .setTitle(
+              "🎫 Ticket Statistics"
+            )
+            .addFields(
+
+              {
+                name: "Open Tickets",
+                value:
+                  String(open),
+                inline: true
+              },
+
+              {
+                name: "Claimed",
+                value:
+                  String(claimed),
+                inline: true
+              },
+
+              {
+                name: "Unclaimed",
+                value:
+                  String(
+                    open - claimed
+                  ),
+                inline: true
+              }
+
+            )
+            .setTimestamp();
+
+        await interaction.reply({
+          embeds: [
+            embed
+          ]
         });
 
-        const guild = await client.guilds
-          .fetch(schedule.guildId)
-          .catch(() => null);
+        return;
+      }
 
-        if (guild) {
-          await sendLog(
-            guild,
-            "📢 Scheduled Announcement Sent",
-            `Channel: ${channel}\nSchedule ID: \`${schedule.id}\``
-          );
+      // ==================================================
+      // TICKET MANAGEMENT
+      // ==================================================
+
+      if (
+        [
+          "close",
+          "claim",
+          "unclaim",
+          "add",
+          "remove",
+          "transcript"
+        ].includes(
+          interaction.commandName
+        )
+      ) {
+
+        if (
+          !isStaff(
+            interaction.member
+          )
+        ) {
+
+          await interaction.reply({
+            content:
+              "❌ You don't have permission.",
+            ephemeral: true
+          });
+
+          return;
         }
-      } catch (error) {
-        console.error("Scheduled announcement error:", error);
+
+        let userId = null;
+
+        for (
+          const [id, ticket]
+          of tickets
+        ) {
+
+          if (
+            ticket.channelId ===
+            interaction.channel.id
+          ) {
+
+            userId = id;
+            break;
+          }
+        }
+
+        if (!userId) {
+
+          await interaction.reply({
+            content:
+              "❌ This is not an active ticket.",
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        const ticket =
+          tickets.get(
+            userId
+          );
+
+        // CLAIM
+        if (
+          interaction.commandName ===
+          "claim"
+        ) {
+
+          ticket.claimedBy =
+            interaction.user.id;
+
+          await interaction.reply(
+            `✅ Ticket claimed by ${interaction.user}.`
+          );
+
+          return;
+        }
+
+        // UNCLAIM
+        if (
+          interaction.commandName ===
+          "unclaim"
+        ) {
+
+          ticket.claimedBy =
+            null;
+
+          await interaction.reply(
+            "✅ Ticket unclaimed."
+          );
+
+          return;
+        }
+
+        // ADD
+        if (
+          interaction.commandName ===
+          "add"
+        ) {
+
+          const user =
+            interaction.options.getUser(
+              "user"
+            );
+
+          await interaction.channel
+            .permissionOverwrites.edit(
+              user.id,
+              {
+                ViewChannel: true,
+                SendMessages: true,
+                ReadMessageHistory: true
+              }
+            );
+
+          await interaction.reply(
+            `✅ ${user} added to the ticket.`
+          );
+
+          return;
+        }
+
+        // REMOVE
+        if (
+          interaction.commandName ===
+          "remove"
+        ) {
+
+          const user =
+            interaction.options.getUser(
+              "user"
+            );
+
+          await interaction.channel
+            .permissionOverwrites
+            .delete(
+              user.id
+            )
+            .catch(() => {});
+
+          await interaction.reply(
+            `✅ ${user} removed from the ticket.`
+          );
+
+          return;
+        }
+
+        // TRANSCRIPT
+        if (
+          interaction.commandName ===
+          "transcript"
+        ) {
+
+          const messages =
+            await interaction.channel
+              .messages.fetch({
+                limit: 100
+              });
+
+          const transcript =
+            [
+              ...messages.values()
+            ]
+              .reverse()
+              .map(
+                message =>
+                  `[${message.createdAt.toISOString()}] ${message.author.tag}: ${message.content}`
+              )
+              .join("\n");
+
+          await interaction.reply({
+            content:
+              "```text\n" +
+              transcript.slice(
+                0,
+                1800
+              ) +
+              "\n```",
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        // CLOSE
+        if (
+          interaction.commandName ===
+          "close"
+        ) {
+
+          tickets.delete(
+            userId
+          );
+
+          const user =
+            await client.users
+              .fetch(userId)
+              .catch(() => null);
+
+          if (user) {
+
+            await user.send(
+              "🔒 Your support ticket has been closed."
+            ).catch(() => {});
+          }
+
+          await interaction.reply(
+            "🔒 Closing ticket..."
+          );
+
+          await sendLog(
+            interaction.guild,
+
+            "🎫 Ticket Closed",
+
+            `User: <@${userId}>\n` +
+            `Closed by: ${interaction.user}`
+          );
+
+          setTimeout(() => {
+
+            interaction.channel
+              .delete()
+              .catch(() => {});
+
+          }, 1500);
+
+          return;
+        }
+      }
+
+      // ==================================================
+      // AUTOMOD
+      // ==================================================
+
+      if (
+        interaction.commandName ===
+        "automod"
+      ) {
+
+        if (
+          !isStaff(
+            interaction.member
+          )
+        ) {
+
+          await interaction.reply({
+            content:
+              "❌ You don't have permission.",
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        const sub =
+          interaction.options
+            .getSubcommand();
+
+        if (
+          sub === "enable"
+        ) {
+
+          botConfig.automod =
+            true;
+
+          await interaction.reply(
+            "🛡️ AutoMod enabled."
+          );
+
+          return;
+        }
+
+        if (
+          sub === "disable"
+        ) {
+
+          botConfig.automod =
+            false;
+
+          await interaction.reply(
+            "🛡️ AutoMod disabled."
+          );
+
+          return;
+        }
+
+        if (
+          sub === "status"
+        ) {
+
+          await interaction.reply(
+            `🛡️ AutoMod: ${
+              botConfig.automod
+                ? "ON"
+                : "OFF"
+            }\n` +
+            `Spam limit: ${botConfig.spamLimit}\n` +
+            `Timeout: ${botConfig.timeoutSeconds}s`
+          );
+
+          return;
+        }
+
+        if (
+          sub === "config"
+        ) {
+
+          const spam =
+            interaction.options
+              .getInteger(
+                "spam_limit"
+              );
+
+          const timeout =
+            interaction.options
+              .getInteger(
+                "timeout"
+              );
+
+          if (
+            spam !== null
+          ) {
+            botConfig.spamLimit =
+              spam;
+          }
+
+          if (
+            timeout !== null
+          ) {
+            botConfig.timeoutSeconds =
+              timeout;
+          }
+
+          await interaction.reply(
+            `✅ AutoMod configured.\nSpam limit: ${botConfig.spamLimit}\nTimeout: ${botConfig.timeoutSeconds}s`
+          );
+
+          return;
+        }
+      }
+
+      // ==================================================
+      // SECURITY
+      // ==================================================
+
+      if (
+        interaction.commandName ===
+        "security"
+      ) {
+
+        if (
+          !isStaff(
+            interaction.member
+          )
+        ) {
+
+          await interaction.reply({
+            content:
+              "❌ You don't have permission.",
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        const sub =
+          interaction.options
+            .getSubcommand();
+
+        if (
+          sub === "enable"
+        ) {
+
+          botConfig.security =
+            true;
+
+          await interaction.reply(
+            "🔐 Security enabled."
+          );
+
+          return;
+        }
+
+        if (
+          sub === "disable"
+        ) {
+
+          botConfig.security =
+            false;
+
+          await interaction.reply(
+            "🔐 Security disabled."
+          );
+
+          return;
+        }
+
+        await interaction.reply(
+          `🔐 Security: ${
+            botConfig.security
+              ? "ON"
+              : "OFF"
+          }\nAnti-raid: ON\nAudit monitoring: ON`
+        );
+
+        return;
+      }
+
+      // ==================================================
+      // ANNOUNCEMENTS
+      // ==================================================
+
+      if (
+        interaction.commandName ===
+        "announce"
+      ) {
+
+        if (
+          !isStaff(
+            interaction.member
+          )
+        ) {
+
+          await interaction.reply({
+            content:
+              "❌ You don't have permission.",
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        const sub =
+          interaction.options
+            .getSubcommand();
+
+        const channel =
+          interaction.options
+            .getChannel(
+              "channel"
+            );
+
+        // NORMAL ANNOUNCEMENT
+        if (
+          sub === "send"
+        ) {
+
+          const message =
+            interaction.options
+              .getString(
+                "message"
+              );
+
+          await channel.send({
+            content:
+              message
+          });
+
+          await interaction.reply({
+            content:
+              "✅ Announcement sent.",
+            ephemeral: true
+          });
+
+          await sendLog(
+            interaction.guild,
+
+            "📢 Announcement Sent",
+
+            `Channel: ${channel}\n` +
+            `By: ${interaction.user}`
+          );
+
+          return;
+        }
+
+        // EMBED ANNOUNCEMENT
+        if (
+          sub === "embed"
+        ) {
+
+          const title =
+            interaction.options
+              .getString(
+                "title"
+              );
+
+          const message =
+            interaction.options
+              .getString(
+                "message"
+              );
+
+          const embed =
+            new EmbedBuilder()
+              .setTitle(
+                title
+              )
+              .setDescription(
+                message
+              )
+              .setTimestamp()
+              .setFooter({
+                text:
+                  `By ${interaction.user.tag}`
+              });
+
+          await channel.send({
+            embeds: [
+              embed
+            ]
+          });
+
+          await interaction.reply({
+            content:
+              "✅ Embed announcement sent.",
+            ephemeral: true
+          });
+
+          await sendLog(
+            interaction.guild,
+
+            "📢 Embed Announcement Sent",
+
+            `Channel: ${channel}\n` +
+            `By: ${interaction.user}`
+          );
+
+          return;
+        }
+      }
+
+    } catch (error) {
+
+      console.error(
+        "Interaction error:",
+        error
+      );
+
+      if (
+        !interaction.replied &&
+        !interaction.deferred
+      ) {
+
+        await interaction.reply({
+          content:
+            "❌ An internal error occurred.",
+          ephemeral: true
+        }).catch(() => {});
       }
     }
-
-  } catch (error) {
-    console.error("Scheduler error:", error);
   }
-}, 15000);
+);
 
-// ===============================
+// ======================================================
 // ERROR HANDLING
-// ===============================
+// ======================================================
 
-process.on("unhandledRejection", error => {
-  console.error("Unhandled rejection:", error);
-});
+process.on(
+  "unhandledRejection",
+  error => {
+    console.error(
+      "Unhandled rejection:",
+      error
+    );
+  }
+);
 
-process.on("uncaughtException", error => {
-  console.error("Uncaught exception:", error);
-});
+process.on(
+  "uncaughtException",
+  error => {
+    console.error(
+      "Uncaught exception:",
+      error
+    );
+  }
+);
 
-// ===============================
+// ======================================================
 // LOGIN
-// ===============================
+// ======================================================
+
+console.log(
+  "Starting Discord bot..."
+);
 
 client.login(TOKEN);
