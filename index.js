@@ -1,21 +1,21 @@
+'use strict';
+
 const {
   Client,
   GatewayIntentBits,
   Partials,
   PermissionsBitField,
-  ChannelType,
+  REST,
+  Routes,
+  SlashCommandBuilder,
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  SlashCommandBuilder,
-  ActivityType,
-  Events,
-  AttachmentBuilder
-} = require("discord.js");
-
-const fs = require("fs");
-const path = require("path");
+  StringSelectMenuBuilder,
+  ChannelType,
+  AuditLogEvent
+} = require('discord.js');
 
 /* =========================================================
    ENVIRONMENT
@@ -24,19 +24,24 @@ const path = require("path");
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
-const SERVER_ID = "1493700265499689154";
-const SUPPORT_ADMIN_ROLE_ID = "1542498406981959801";
-const SUPPORT_LOG_CHANNEL_ID = "1542500573000106024";
-
 if (!TOKEN) {
-  console.error("DISCORD_TOKEN is missing.");
+  console.error('DISCORD_TOKEN is missing.');
   process.exit(1);
 }
 
 if (!CLIENT_ID) {
-  console.error("CLIENT_ID is missing.");
+  console.error('CLIENT_ID is missing.');
   process.exit(1);
 }
+
+/* =========================================================
+   YOUR SERVER CONFIG
+========================================================= */
+
+const GUILD_ID = '1493700265499689154';
+
+const SUPPORT_ADMIN_ROLE_ID = '1542498406981959801';
+const SUPPORT_LOG_CHANNEL_ID = '1542500573000106024';
 
 /* =========================================================
    CLIENT
@@ -48,10 +53,8 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildModeration,
-    GatewayIntentBits.GuildPresences,
     GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.DirectMessageReactions
+    GatewayIntentBits.GuildModeration
   ],
   partials: [
     Partials.Channel,
@@ -61,790 +64,1209 @@ const client = new Client({
 });
 
 /* =========================================================
-   DATABASE
+   PERSISTENT CONFIG
+   Simple JSON file - no extra npm package required.
 ========================================================= */
 
-const DATA_DIR = path.join(__dirname, "data");
-const DB_FILE = path.join(DATA_DIR, "database.json");
+const fs = require('fs');
+const path = require('path');
+
+const DATA_DIR = path.join(__dirname, 'data');
+const DATA_FILE = path.join(DATA_DIR, 'config.json');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-let db = {
+let database = {
   guilds: {}
 };
 
-function saveDB() {
+function loadDatabase() {
   try {
-    fs.writeFileSync(
-      DB_FILE,
-      JSON.stringify(db, null, 2)
-    );
-  } catch (err) {
-    console.error("Database save error:", err);
-  }
-}
-
-function loadDB() {
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      const raw = fs.readFileSync(
-        DB_FILE,
-        "utf8"
-      );
-
-      db = JSON.parse(raw);
-
-      if (!db.guilds) {
-        db.guilds = {};
-      }
+    if (fs.existsSync(DATA_FILE)) {
+      database = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     }
-  } catch (err) {
-    console.error("Database load error:", err);
-    db = { guilds: {} };
+  } catch (error) {
+    console.error('Database load error:', error);
   }
 }
 
-loadDB();
+function saveDatabase() {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(database, null, 2));
+  } catch (error) {
+    console.error('Database save error:', error);
+  }
+}
 
-/* =========================================================
-   DEFAULT CONFIG
-========================================================= */
-
-function defaultGuild() {
+function defaultGuildConfig() {
   return {
     automod: {
       enabled: true,
       invites: true,
       spam: true,
-      mentions: true,
+      massMentions: true,
+      badWords: true,
       caps: true,
-      repeated: true,
-      badwords: true,
-
-      spamLimit: 5,
-      spamWindow: 7000,
-      mentionLimit: 5,
+      repeatedMessages: true,
+      maxMentions: 5,
+      spamLimit: 6,
+      spamWindow: 5000,
       capsPercent: 75,
-
+      repeatedLimit: 3,
+      punishment: 'timeout',
+      timeoutSeconds: 60,
+      logChannel: null,
       badWords: [
-        "badword1",
-        "badword2"
-      ],
-
-      punishment: "timeout",
-      timeoutMinutes: 5,
-
-      ignoredChannels: [],
-      ignoredRoles: []
-    },
-
-    autotimeout: {
-      enabled: true,
-      duration: 5,
-      spam: true,
-      invites: true,
-      mentions: true,
-      badwords: true,
-      caps: true,
-      repeated: true
+        'badword1',
+        'badword2'
+      ]
     },
 
     security: {
       enabled: true,
       antiRaid: true,
-      antiNuke: true,
-
-      raidLimit: 8,
+      raidJoinLimit: 8,
       raidWindow: 10000,
+      raidTimeout: true,
+      raidTimeoutSeconds: 3600,
 
-      nukeLimit: 3,
-      nukeWindow: 10000,
+      antiNuke: true,
+      maxChannelDeletes: 3,
+      maxRoleDeletes: 3,
+      maxChannelCreates: 8,
+      maxRoleCreates: 8,
+      actionWindow: 10000,
 
-      lockdown: false
-    },
-
-    roleProtection: {
-      enabled: true,
+      roleProtection: true,
+      protectedRoles: [],
       protectEveryone: true,
 
-      protectedRoles: [
-        SUPPORT_ADMIN_ROLE_ID
-      ],
-
-      timeoutMinutes: 60
-    },
-
-    trusted: {
-      users: [],
-      bots: []
-    },
-
-    logs: {
-      automod: SUPPORT_LOG_CHANNEL_ID,
-      security: SUPPORT_LOG_CHANNEL_ID,
-      moderation: SUPPORT_LOG_CHANNEL_ID,
-      audit: SUPPORT_LOG_CHANNEL_ID,
-      tickets: SUPPORT_LOG_CHANNEL_ID,
-      suggestions: SUPPORT_LOG_CHANNEL_ID,
-      announcements: SUPPORT_LOG_CHANNEL_ID,
-      members: SUPPORT_LOG_CHANNEL_ID,
-      messages: SUPPORT_LOG_CHANNEL_ID,
-      roles: SUPPORT_LOG_CHANNEL_ID
+      trustedUsers: [],
+      trustedBots: []
     },
 
     tickets: {
-      panelChannelId: null,
+      enabled: true,
       categoryId: null,
-      records: {},
-      counter: 0
-    },
-
-    suggestions: {
-      channelId: null
+      supportRoleId: SUPPORT_ADMIN_ROLE_ID,
+      logChannelId: SUPPORT_LOG_CHANNEL_ID,
+      welcomeMessage:
+        'Thank you for contacting support. A staff member will assist you shortly.'
     },
 
     announcements: {
+      enabled: true,
       channels: [],
-      roles: []
+      defaultChannel: null
     },
 
-    warnings: {},
-    punishments: {},
+    moderation: {
+      warnEscalation: true,
+      warnTimeoutAt: 3,
+      warnKickAt: 5,
+      warnBanAt: 7
+    },
 
-    statistics: {
-      warnings: 0,
-      punishments: 0,
-      automod: 0,
-      securityEvents: 0,
-      tickets: 0,
-      suggestions: 0
+    logs: {
+      enabled: true,
+      channelId: SUPPORT_LOG_CHANNEL_ID
     }
   };
 }
 
-function getGuildData(guildId) {
-  if (!db.guilds[guildId]) {
-    db.guilds[guildId] = defaultGuild();
-    saveDB();
+function getGuildConfig(guildId) {
+  if (!database.guilds[guildId]) {
+    database.guilds[guildId] = defaultGuildConfig();
+    saveDatabase();
   }
 
-  return db.guilds[guildId];
+  return database.guilds[guildId];
 }
+
+loadDatabase();
+
+/* =========================================================
+   MEMORY
+========================================================= */
+
+const messageTracker = new Map();
+const raidTracker = new Map();
+const securityActions = new Map();
+const openTickets = new Map();
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
-function embed(
-  title,
-  description,
-  color = 0x5865f2
-) {
-  return new EmbedBuilder()
+function isStaff(member) {
+  if (!member) return false;
+
+  return (
+    member.permissions.has(PermissionsBitField.Flags.Administrator) ||
+    member.roles.cache.has(SUPPORT_ADMIN_ROLE_ID)
+  );
+}
+
+function isTrusted(guild, userId) {
+  const config = getGuildConfig(guild.id);
+
+  if (userId === guild.ownerId) return true;
+
+  if (config.security.trustedUsers.includes(userId)) return true;
+
+  return false;
+}
+
+function isTrustedBot(guild, user) {
+  const config = getGuildConfig(guild.id);
+
+  return (
+    user.bot &&
+    config.security.trustedBots.includes(user.id)
+  );
+}
+
+function canModerate(executor, target) {
+  if (!executor || !target) return false;
+
+  if (target.id === executor.guild.ownerId) return false;
+
+  return executor.roles.highest.comparePositionTo(target.roles.highest) > 0;
+}
+
+async function sendLog(guild, title, description, color = 0x5865F2) {
+  const config = getGuildConfig(guild.id);
+
+  if (!config.logs.enabled) return;
+
+  const channelId =
+    config.logs.channelId ||
+    config.tickets.logChannelId ||
+    SUPPORT_LOG_CHANNEL_ID;
+
+  const channel = guild.channels.cache.get(channelId);
+
+  if (!channel || !channel.isTextBased()) return;
+
+  const embed = new EmbedBuilder()
     .setTitle(title)
     .setDescription(description)
     .setColor(color)
     .setTimestamp();
-}
 
-function shorten(text, length = 1000) {
-  if (!text) return "";
-  return text.length > length
-    ? text.slice(0, length) + "..."
-    : text;
-}
-
-function isOwner(interaction) {
-  return interaction.user.id ===
-    interaction.guild.ownerId;
-}
-
-function isStaff(interaction) {
-  if (!interaction.member) return false;
-
-  if (isOwner(interaction)) {
-    return true;
-  }
-
-  return (
-    interaction.member.roles.cache.has(
-      SUPPORT_ADMIN_ROLE_ID
-    ) ||
-    interaction.member.permissions.has(
-      PermissionsBitField.Flags.Administrator
-    )
-  );
-}
-
-function requireStaff(interaction) {
-  return isStaff(interaction);
-}
-
-function isTrusted(guildData, userId) {
-  return guildData.trusted.users.includes(
-    userId
-  );
-}
-
-function isTrustedBot(guildData, userId) {
-  return guildData.trusted.bots.includes(
-    userId
-  );
-}
-
-async function sendLog(
-  guild,
-  type,
-  title,
-  description,
-  color = 0x5865f2
-) {
   try {
-    const data = getGuildData(guild.id);
-    const channelId = data.logs[type];
-
-    if (!channelId) return;
-
-    const channel =
-      await guild.channels.fetch(channelId)
-        .catch(() => null);
-
-    if (!channel || !channel.isTextBased()) {
-      return;
-    }
-
-    await channel.send({
-      embeds: [
-        embed(
-          title,
-          description,
-          color
-        )
-      ]
-    });
-  } catch (err) {
-    console.error("Log error:", err);
-  }
+    await channel.send({ embeds: [embed] });
+  } catch {}
 }
 
-/* =========================================================
-   MODERATION DATABASE
-========================================================= */
+async function sendAutoModLog(guild, title, description) {
+  const config = getGuildConfig(guild.id);
 
-function addWarning(
-  guildId,
-  userId,
-  reason,
-  moderatorId
-) {
-  if (!db.guilds[guildId].warnings[userId]) {
-    db.guilds[guildId].warnings[userId] = [];
-  }
+  const channelId =
+    config.automod.logChannel ||
+    config.logs.channelId ||
+    SUPPORT_LOG_CHANNEL_ID;
 
-  const record = {
-    id: Date.now().toString(),
-    reason,
-    moderatorId,
-    timestamp: Date.now()
-  };
+  const channel = guild.channels.cache.get(channelId);
 
-  db.guilds[guildId].warnings[userId].push(
-    record
-  );
+  if (!channel || !channel.isTextBased()) return;
 
-  db.guilds[guildId].statistics.warnings++;
+  const embed = new EmbedBuilder()
+    .setTitle(`🛡️ ${title}`)
+    .setDescription(description)
+    .setColor(0xED4245)
+    .setTimestamp();
 
-  saveDB();
-
-  return record;
-}
-
-function getWarnings(guildId, userId) {
-  return (
-    db.guilds[guildId]?.warnings[userId] || []
-  );
-}
-
-function addPunishment(
-  guildId,
-  userId,
-  type,
-  reason,
-  moderatorId
-) {
-  if (!db.guilds[guildId].punishments[userId]) {
-    db.guilds[guildId].punishments[userId] = [];
-  }
-
-  db.guilds[guildId].punishments[userId].push({
-    id: Date.now().toString(),
-    type,
-    reason,
-    moderatorId,
-    timestamp: Date.now()
-  });
-
-  db.guilds[guildId].statistics.punishments++;
-
-  saveDB();
-}
-
-function getPunishments(guildId, userId) {
-  return (
-    db.guilds[guildId]?.punishments[userId] ||
-    []
-  );
-}
-
-/* =========================================================
-   TIMEOUT
-========================================================= */
-
-async function timeoutMember(
-  member,
-  minutes,
-  reason
-) {
   try {
-    if (!member.moderatable) {
-      return false;
-    }
+    await channel.send({ embeds: [embed] });
+  } catch {}
+}
 
-    await member.timeout(
-      Math.min(
-        minutes * 60 * 1000,
-        28 * 24 * 60 * 60 * 1000
-      ),
-      reason
-    );
+async function timeoutMember(member, seconds, reason) {
+  if (!member.moderatable) return false;
 
+  try {
+    await member.timeout(seconds * 1000, reason);
     return true;
-  } catch (err) {
-    console.error("Timeout error:", err);
+  } catch {
     return false;
   }
 }
 
-/* =========================================================
-   WARNING ESCALATION
-========================================================= */
+async function punishMember(member, type, reason, duration = 60) {
+  if (!member) return false;
 
-async function warningEscalation(
-  member,
-  count
-) {
-  if (count === 3) {
-    if (
-      await timeoutMember(
-        member,
-        10,
-        "Automatic warning escalation"
-      )
-    ) {
-      return "10 minute timeout";
-    }
+  if (type === 'timeout') {
+    return timeoutMember(member, duration, reason);
   }
 
-  if (count === 5) {
-    if (
-      await timeoutMember(
-        member,
-        30,
-        "Automatic warning escalation"
-      )
-    ) {
-      return "30 minute timeout";
-    }
+  if (type === 'kick') {
+    if (!member.kickable) return false;
+    await member.kick(reason);
+    return true;
   }
 
-  if (count >= 7) {
-    if (member.bannable) {
-      await member.ban({
-        reason:
-          "Automatic warning escalation"
-      });
-
-      return "Automatic ban";
-    }
+  if (type === 'ban') {
+    if (!member.bannable) return false;
+    await member.ban({ reason });
+    return true;
   }
 
-  return null;
+  return false;
 }
 
 /* =========================================================
-   AUTOMOD TRACKERS
+   SLASH COMMANDS
 ========================================================= */
 
-const messageTracker = new Map();
-const joinTracker = new Map();
-const actionTracker = new Map();
+const commands = [
+
+  new SlashCommandBuilder()
+    .setName('ticket')
+    .setDescription('Open the DM support ticket system'),
+
+  new SlashCommandBuilder()
+    .setName('close-ticket')
+    .setDescription('Close the current ticket'),
+
+  new SlashCommandBuilder()
+    .setName('automod')
+    .setDescription('Configure AutoMod')
+    .addSubcommand(sub =>
+      sub.setName('enable')
+        .setDescription('Enable AutoMod')
+    )
+    .addSubcommand(sub =>
+      sub.setName('disable')
+        .setDescription('Disable AutoMod')
+    )
+    .addSubcommand(sub =>
+      sub.setName('status')
+        .setDescription('Show AutoMod status')
+    )
+    .addSubcommand(sub =>
+      sub.setName('logchannel')
+        .setDescription('Set AutoMod log channel')
+        .addChannelOption(opt =>
+          opt.setName('channel')
+            .setDescription('Log channel')
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildText)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('invites')
+        .setDescription('Enable/disable invite protection')
+        .addBooleanOption(opt =>
+          opt.setName('enabled')
+            .setDescription('Enabled')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('spam')
+        .setDescription('Enable/disable spam protection')
+        .addBooleanOption(opt =>
+          opt.setName('enabled')
+            .setDescription('Enabled')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('mentions')
+        .setDescription('Enable/disable mass mention protection')
+        .addBooleanOption(opt =>
+          opt.setName('enabled')
+            .setDescription('Enabled')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('badwords')
+        .setDescription('Enable/disable bad word protection')
+        .addBooleanOption(opt =>
+          opt.setName('enabled')
+            .setDescription('Enabled')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('caps')
+        .setDescription('Enable/disable caps protection')
+        .addBooleanOption(opt =>
+          opt.setName('enabled')
+            .setDescription('Enabled')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('repeated')
+        .setDescription('Enable/disable repeated message protection')
+        .addBooleanOption(opt =>
+          opt.setName('enabled')
+            .setDescription('Enabled')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('punishment')
+        .setDescription('Set AutoMod punishment')
+        .addStringOption(opt =>
+          opt.setName('type')
+            .setDescription('Punishment')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Timeout', value: 'timeout' },
+              { name: 'Kick', value: 'kick' },
+              { name: 'Ban', value: 'ban' }
+            )
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName('security')
+    .setDescription('Configure server security')
+    .addSubcommand(sub =>
+      sub.setName('status')
+        .setDescription('Show security status')
+    )
+    .addSubcommand(sub =>
+      sub.setName('enable')
+        .setDescription('Enable security')
+    )
+    .addSubcommand(sub =>
+      sub.setName('disable')
+        .setDescription('Disable security')
+    )
+    .addSubcommand(sub =>
+      sub.setName('antiraid')
+        .setDescription('Configure anti-raid')
+        .addBooleanOption(opt =>
+          opt.setName('enabled')
+            .setDescription('Enabled')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('antinuke')
+        .setDescription('Configure anti-nuke')
+        .addBooleanOption(opt =>
+          opt.setName('enabled')
+            .setDescription('Enabled')
+            .setRequired(true)
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName('warn')
+    .setDescription('Warn a member')
+    .addUserOption(opt =>
+      opt.setName('user')
+        .setDescription('Member')
+        .setRequired(true)
+    )
+    .addStringOption(opt =>
+      opt.setName('reason')
+        .setDescription('Reason')
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('warnings')
+    .setDescription('View member warnings')
+    .addUserOption(opt =>
+      opt.setName('user')
+        .setDescription('Member')
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('timeout')
+    .setDescription('Timeout a member')
+    .addUserOption(opt =>
+      opt.setName('user')
+        .setDescription('Member')
+        .setRequired(true)
+    )
+    .addIntegerOption(opt =>
+      opt.setName('minutes')
+        .setDescription('Minutes')
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(40320)
+    )
+    .addStringOption(opt =>
+      opt.setName('reason')
+        .setDescription('Reason')
+    ),
+
+  new SlashCommandBuilder()
+    .setName('kick')
+    .setDescription('Kick a member')
+    .addUserOption(opt =>
+      opt.setName('user')
+        .setDescription('Member')
+        .setRequired(true)
+    )
+    .addStringOption(opt =>
+      opt.setName('reason')
+        .setDescription('Reason')
+    ),
+
+  new SlashCommandBuilder()
+    .setName('ban')
+    .setDescription('Ban a member')
+    .addUserOption(opt =>
+      opt.setName('user')
+        .setDescription('Member')
+        .setRequired(true)
+    )
+    .addStringOption(opt =>
+      opt.setName('reason')
+        .setDescription('Reason')
+    ),
+
+  new SlashCommandBuilder()
+    .setName('unban')
+    .setDescription('Unban a user')
+    .addStringOption(opt =>
+      opt.setName('userid')
+        .setDescription('User ID')
+        .setRequired(true)
+    )
+    .addStringOption(opt =>
+      opt.setName('reason')
+        .setDescription('Reason')
+    ),
+
+  new SlashCommandBuilder()
+    .setName('punishments')
+    .setDescription('View punishment history')
+    .addUserOption(opt =>
+      opt.setName('user')
+        .setDescription('Member')
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('suggest')
+    .setDescription('Create a suggestion')
+    .addStringOption(opt =>
+      opt.setName('suggestion')
+        .setDescription('Your suggestion')
+        .setRequired(true)
+        .setMaxLength(1000)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('config')
+    .setDescription('View or configure the bot')
+    .addSubcommand(sub =>
+      sub.setName('status')
+        .setDescription('Show configuration')
+    )
+    .addSubcommand(sub =>
+      sub.setName('logs')
+        .setDescription('Set general log channel')
+        .addChannelOption(opt =>
+          opt.setName('channel')
+            .setDescription('Log channel')
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildText)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('support-role')
+        .setDescription('Set support role')
+        .addRoleOption(opt =>
+          opt.setName('role')
+            .setDescription('Support role')
+            .setRequired(true)
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName('trust')
+    .setDescription('Manage trusted users and bots')
+    .addSubcommand(sub =>
+      sub.setName('user-add')
+        .setDescription('Trust a user')
+        .addUserOption(opt =>
+          opt.setName('user')
+            .setDescription('User')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('user-remove')
+        .setDescription('Remove trusted user')
+        .addUserOption(opt =>
+          opt.setName('user')
+            .setDescription('User')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('bot-add')
+        .setDescription('Trust a bot')
+        .addUserOption(opt =>
+          opt.setName('bot')
+            .setDescription('Bot')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('bot-remove')
+        .setDescription('Remove trusted bot')
+        .addUserOption(opt =>
+          opt.setName('bot')
+            .setDescription('Bot')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('list')
+        .setDescription('List trusted users and bots')
+    ),
+
+  new SlashCommandBuilder()
+    .setName('role-protect')
+    .setDescription('Configure protected roles')
+    .addSubcommand(sub =>
+      sub.setName('add')
+        .setDescription('Protect a role')
+        .addRoleOption(opt =>
+          opt.setName('role')
+            .setDescription('Role')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('remove')
+        .setDescription('Remove protected role')
+        .addRoleOption(opt =>
+          opt.setName('role')
+            .setDescription('Role')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('list')
+        .setDescription('List protected roles')
+    )
+    .addSubcommand(sub =>
+      sub.setName('everyone')
+        .setDescription('Enable/disable @everyone protection')
+        .addBooleanOption(opt =>
+          opt.setName('enabled')
+            .setDescription('Enabled')
+            .setRequired(true)
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName('autotimeout')
+    .setDescription('Configure automatic timeout')
+    .addSubcommand(sub =>
+      sub.setName('status')
+        .setDescription('Show auto-timeout settings')
+    )
+    .addSubcommand(sub =>
+      sub.setName('set')
+        .setDescription('Set timeout duration')
+        .addIntegerOption(opt =>
+          opt.setName('seconds')
+            .setDescription('Timeout seconds')
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(2419200)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('spam')
+        .setDescription('Set spam timeout duration')
+        .addIntegerOption(opt =>
+          opt.setName('seconds')
+            .setDescription('Seconds')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('raid')
+        .setDescription('Set raid timeout duration')
+        .addIntegerOption(opt =>
+          opt.setName('seconds')
+            .setDescription('Seconds')
+            .setRequired(true)
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName('announcement')
+    .setDescription('Advanced announcement system')
+    .addSubcommand(sub =>
+      sub.setName('send')
+        .setDescription('Send announcement')
+        .addChannelOption(opt =>
+          opt.setName('channel')
+            .setDescription('Announcement channel')
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildText)
+        )
+        .addStringOption(opt =>
+          opt.setName('title')
+            .setDescription('Title')
+            .setRequired(true)
+        )
+        .addStringOption(opt =>
+          opt.setName('message')
+            .setDescription('Message')
+            .setRequired(true)
+        )
+        .addStringOption(opt =>
+          opt.setName('image')
+            .setDescription('Image URL')
+            .setRequired(false)
+        )
+        .addStringOption(opt =>
+          opt.setName('mention')
+            .setDescription('Mention')
+            .setRequired(false)
+            .addChoices(
+              { name: 'No mention', value: 'none' },
+              { name: '@everyone', value: 'everyone' },
+              { name: '@here', value: 'here' }
+            )
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('channel-add')
+        .setDescription('Add announcement channel')
+        .addChannelOption(opt =>
+          opt.setName('channel')
+            .setDescription('Channel')
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildText)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('channel-remove')
+        .setDescription('Remove announcement channel')
+        .addChannelOption(opt =>
+          opt.setName('channel')
+            .setDescription('Channel')
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildText)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('channels')
+        .setDescription('List announcement channels')
+    ),
+
+  new SlashCommandBuilder()
+    .setName('audit')
+    .setDescription('View recent audit activity')
+    .addIntegerOption(opt =>
+      opt.setName('limit')
+        .setDescription('Number of entries')
+        .setRequired(false)
+        .setMinValue(1)
+        .setMaxValue(20)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Show all bot commands')
+
+].map(command => command.toJSON());
+
+/* =========================================================
+   REGISTER COMMANDS
+========================================================= */
+
+async function registerCommands() {
+  const rest = new REST({ version: '10' }).setToken(TOKEN);
+
+  try {
+    console.log('Registering slash commands...');
+
+    await rest.put(
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      { body: commands }
+    );
+
+    console.log(`Registered ${commands.length} slash commands.`);
+  } catch (error) {
+    console.error('Slash command registration error:', error);
+  }
+}
+
+/* =========================================================
+   READY
+========================================================= */
+
+client.once('ready', async () => {
+  console.log(`Logged in as ${client.user.tag}`);
+  console.log(`Guild ID: ${GUILD_ID}`);
+
+  await registerCommands();
+
+  client.user.setPresence({
+    activities: [
+      {
+        name: 'DM Support • AutoMod • Security',
+        type: 3
+      }
+    ],
+    status: 'online'
+  });
+});
+
+/* =========================================================
+   DM TICKET SYSTEM
+========================================================= */
+
+async function createTicketFromDM(message) {
+  if (message.author.bot) return;
+
+  const guild = client.guilds.cache.get(GUILD_ID);
+
+  if (!guild) return;
+
+  const config = getGuildConfig(guild.id);
+
+  if (!config.tickets.enabled) return;
+
+  if (openTickets.has(message.author.id)) {
+    const existingChannel = guild.channels.cache.get(
+      openTickets.get(message.author.id)
+    );
+
+    if (existingChannel) {
+      await existingChannel.send({
+        content:
+          `📩 **New DM from ${message.author.tag}:**\n${message.content || '(attachment)'}`
+      });
+      return;
+    }
+
+    openTickets.delete(message.author.id);
+  }
+
+  let category = null;
+
+  if (config.tickets.categoryId) {
+    category = guild.channels.cache.get(config.tickets.categoryId);
+  }
+
+  const channelName =
+    `ticket-${message.author.username}`
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-')
+      .slice(0, 80);
+
+  const channel = await guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent: category?.id || null,
+    topic: `DM Ticket • ${message.author.id}`
+  });
+
+  openTickets.set(message.author.id, channel.id);
+
+  await channel.permissionOverwrites.create(
+    message.author.id,
+    {
+      ViewChannel: false
+    }
+  );
+
+  const supportRole = guild.roles.cache.get(
+    config.tickets.supportRoleId || SUPPORT_ADMIN_ROLE_ID
+  );
+
+  if (supportRole) {
+    await channel.permissionOverwrites.create(
+      supportRole.id,
+      {
+        ViewChannel: true,
+        SendMessages: true,
+        ReadMessageHistory: true
+      }
+    );
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle('🎫 New DM Ticket')
+    .setDescription(
+      `A new support ticket was opened by **${message.author.tag}**.\n\n` +
+      `**User ID:** \`${message.author.id}\`\n\n` +
+      `**First message:**\n${message.content || '(attachment)'}`
+    )
+    .setColor(0x5865F2)
+    .setTimestamp();
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('ticket_close')
+      .setLabel('Close Ticket')
+      .setEmoji('🔒')
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  await channel.send({
+    content: supportRole ? `<@&${supportRole.id}>` : undefined,
+    embeds: [embed],
+    components: [row]
+  });
+
+  try {
+    await message.author.send(
+      config.tickets.welcomeMessage
+    );
+  } catch {}
+
+  await sendLog(
+    guild,
+    '🎫 Ticket Created',
+    `Ticket created for **${message.author.tag}**.`,
+    0x57F287
+  );
+}
+
+async function relayTicketMessage(message) {
+  if (message.author.bot) return;
+
+  if (!message.guild) return;
+
+  if (!message.channel.name?.startsWith('ticket-')) return;
+
+  const topic = message.channel.topic || '';
+
+  const match = topic.match(/DM Ticket • (\d+)/);
+
+  if (!match) return;
+
+  const userId = match[1];
+
+  const user = await client.users.fetch(userId).catch(() => null);
+
+  if (!user) return;
+
+  try {
+    const embed = new EmbedBuilder()
+      .setTitle(`💬 Support Reply — ${message.guild.name}`)
+      .setDescription(
+        message.content || '(attachment)'
+      )
+      .setFooter({
+        text: `Staff: ${message.author.tag}`
+      })
+      .setTimestamp();
+
+    await user.send({
+      embeds: [embed]
+    });
+  } catch {}
+}
 
 /* =========================================================
    AUTOMOD
 ========================================================= */
 
-function hasInvite(text) {
-  return /(?:discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\//i
-    .test(text);
-}
-
-function capsPercentage(text) {
-  const letters =
-    text.match(/[A-Za-z]/g) || [];
-
-  if (!letters.length) return 0;
-
-  const caps =
-    letters.filter(c =>
-      c === c.toUpperCase()
-    ).length;
-
-  return (
-    caps / letters.length
-  ) * 100;
-}
-
-function containsBadWord(
-  text,
-  words
-) {
-  const lower = text.toLowerCase();
-
-  return words.some(word =>
-    lower.includes(word.toLowerCase())
+function containsInvite(content) {
+  return /(?:discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\//i.test(
+    content
   );
 }
 
-async function autoTimeout(
-  message,
-  reason
-) {
-  const data =
-    getGuildData(message.guild.id);
-
-  if (!data.autotimeout.enabled) {
-    return;
-  }
-
-  const member = message.member;
-
-  if (!member || member.permissions.has(
-    PermissionsBitField.Flags.Administrator
-  )) {
-    return;
-  }
-
-  if (!member.moderatable) {
-    return;
-  }
-
-  await timeoutMember(
-    member,
-    data.autotimeout.duration,
-    reason
-  );
-
-  data.statistics.automod++;
-
-  saveDB();
-
-  await sendLog(
-    message.guild,
-    "automod",
-    "⏱️ AutoTimeout",
-    [
-      `**User:** ${member}`,
-      `**Reason:** ${reason}`,
-      `**Duration:** ${data.autotimeout.duration} minutes`
-    ].join("\n"),
-    0xfee75c
-  );
-}
-
-async function handleAutoMod(
-  message
-) {
-  if (
-    !message.guild ||
-    message.author.bot
-  ) {
-    return;
-  }
-
-  const data =
-    getGuildData(message.guild.id);
-
-  if (!data.automod.enabled) {
-    return;
-  }
-
-  if (
-    data.automod.ignoredChannels
-      .includes(message.channel.id)
-  ) {
-    return;
-  }
-
-  const ignoredRole =
-    message.member?.roles.cache.some(
-      role =>
-        data.automod.ignoredRoles
-          .includes(role.id)
-    );
-
-  if (ignoredRole) {
-    return;
-  }
-
-  const content =
-    message.content || "";
-
-  /* INVITE */
-
-  if (
-    data.automod.invites &&
-    hasInvite(content) &&
-    !isTrusted(
-      data,
-      message.author.id
-    )
-  ) {
-    await message.delete().catch(() => {});
-
-    await autoTimeout(
-      message,
-      "Discord invite link"
-    );
-
-    return;
-  }
-
-  /* MASS MENTIONS */
-
-  const mentions =
+function hasMassMentions(message, limit) {
+  const total =
     message.mentions.users.size +
     message.mentions.roles.size;
 
-  if (
-    data.automod.mentions &&
-    mentions >= data.automod.mentionLimit
+  return total >= limit || message.mentions.everyone;
+}
+
+function hasTooManyCaps(content, percentage) {
+  const letters = content.match(/[A-Za-z]/g);
+
+  if (!letters || letters.length < 8) return false;
+
+  const upper = content.match(/[A-Z]/g) || [];
+
+  return (upper.length / letters.length) * 100 >= percentage;
+}
+
+function hasBadWord(content, badWords) {
+  const lower = content.toLowerCase();
+
+  return badWords.some(word =>
+    lower.includes(String(word).toLowerCase())
+  );
+}
+
+function isRepeatedMessage(message, config) {
+  const userId = message.author.id;
+
+  if (!messageTracker.has(userId)) {
+    messageTracker.set(userId, []);
+  }
+
+  const list = messageTracker.get(userId);
+
+  const now = Date.now();
+
+  list.push({
+    content: message.content,
+    time: now
+  });
+
+  while (
+    list.length &&
+    now - list[0].time > 15000
   ) {
-    await message.delete().catch(() => {});
+    list.shift();
+  }
 
-    await autoTimeout(
-      message,
-      "Mass mentions"
-    );
+  const same = list.filter(
+    x => x.content === message.content
+  );
 
+  return same.length >= config.automod.repeatedLimit;
+}
+
+function isSpamming(message, config) {
+  const userId = message.author.id;
+
+  if (!messageTracker.has(`spam:${userId}`)) {
+    messageTracker.set(`spam:${userId}`, []);
+  }
+
+  const list = messageTracker.get(`spam:${userId}`);
+
+  const now = Date.now();
+
+  list.push(now);
+
+  while (
+    list.length &&
+    now - list[0] > config.automod.spamWindow
+  ) {
+    list.shift();
+  }
+
+  return list.length >= config.automod.spamLimit;
+}
+
+async function handleAutoMod(message) {
+  if (!message.guild) return;
+  if (message.author.bot) return;
+
+  const config = getGuildConfig(message.guild.id);
+
+  if (!config.automod.enabled) return;
+
+  const member = message.member;
+
+  if (!member) return;
+
+  if (
+    isStaff(member) ||
+    isTrusted(message.guild, message.author.id)
+  ) {
     return;
   }
 
-  /* BAD WORDS */
+  let violation = null;
 
   if (
-    data.automod.badwords &&
-    containsBadWord(
-      content,
-      data.automod.badWords
+    config.automod.invites &&
+    containsInvite(message.content)
+  ) {
+    violation = 'Discord invite link';
+  }
+
+  if (
+    !violation &&
+    config.automod.massMentions &&
+    hasMassMentions(
+      message,
+      config.automod.maxMentions
     )
   ) {
-    await message.delete().catch(() => {});
-
-    await autoTimeout(
-      message,
-      "Blocked word"
-    );
-
-    return;
+    violation = 'Mass mentions';
   }
-
-  /* CAPS */
 
   if (
-    data.automod.caps &&
-    content.length >= 8 &&
-    capsPercentage(content) >=
-      data.automod.capsPercent
+    !violation &&
+    config.automod.badWords &&
+    hasBadWord(
+      message.content,
+      config.automod.badWords
+    )
   ) {
-    await message.delete().catch(() => {});
-
-    await autoTimeout(
-      message,
-      "Excessive capital letters"
-    );
-
-    return;
+    violation = 'Blocked word';
   }
 
-  /* REPEATED MESSAGE */
-
-  if (data.automod.repeated) {
-    const key =
-      `${message.guild.id}:${message.author.id}`;
-
-    const old =
-      messageTracker.get(key);
-
-    if (
-      old &&
-      old.content === content &&
-      Date.now() - old.time < 10000
-    ) {
-      await message.delete().catch(() => {});
-
-      await autoTimeout(
-        message,
-        "Repeated message spam"
-      );
-
-      return;
-    }
-
-    messageTracker.set(key, {
-      content,
-      time: Date.now()
-    });
+  if (
+    !violation &&
+    config.automod.caps &&
+    hasTooManyCaps(
+      message.content,
+      config.automod.capsPercent
+    )
+  ) {
+    violation = 'Excessive caps';
   }
 
-  /* SPAM */
-
-  if (data.automod.spam) {
-    const key =
-      `${message.guild.id}:${message.author.id}`;
-
-    let list =
-      messageTracker.get(
-        `${key}:spam`
-      ) || [];
-
-    list = list.filter(
-      timestamp =>
-        Date.now() - timestamp <=
-        data.automod.spamWindow
-    );
-
-    list.push(Date.now());
-
-    messageTracker.set(
-      `${key}:spam`,
-      list
-    );
-
-    if (
-      list.length >=
-      data.automod.spamLimit
-    ) {
-      await autoTimeout(
-        message,
-        "Message spam"
-      );
-
-      messageTracker.delete(
-        `${key}:spam`
-      );
-    }
+  if (
+    !violation &&
+    config.automod.repeatedMessages &&
+    isRepeatedMessage(message, config)
+  ) {
+    violation = 'Repeated messages';
   }
+
+  if (
+    !violation &&
+    config.automod.spam &&
+    isSpamming(message, config)
+  ) {
+    violation = 'Spam';
+  }
+
+  if (!violation) return;
+
+  try {
+    await message.delete();
+  } catch {}
+
+  const punishment = config.automod.punishment;
+
+  await punishMember(
+    member,
+    punishment,
+    `AutoMod: ${violation}`,
+    config.automod.timeoutSeconds
+  );
+
+  await sendAutoModLog(
+    message.guild,
+    'AutoMod Action',
+    `**User:** ${message.author.tag}\n` +
+    `**ID:** ${message.author.id}\n` +
+    `**Reason:** ${violation}\n` +
+    `**Punishment:** ${punishment}`
+  );
 }
 
 /* =========================================================
    ANTI RAID
 ========================================================= */
 
-async function handleMemberJoin(member) {
-  const data =
-    getGuildData(member.guild.id);
+async function handleAntiRaid(member) {
+  const guild = member.guild;
+  const config = getGuildConfig(guild.id);
 
-  if (
-    !data.security.enabled ||
-    !data.security.antiRaid
-  ) {
-    return;
+  if (!config.security.enabled) return;
+  if (!config.security.antiRaid) return;
+
+  if (isTrusted(guild, member.id)) return;
+
+  const now = Date.now();
+
+  if (!raidTracker.has(guild.id)) {
+    raidTracker.set(guild.id, []);
   }
 
-  const key =
-    member.guild.id;
+  const list = raidTracker.get(guild.id);
 
-  let joins =
-    joinTracker.get(key) || [];
+  list.push(now);
 
-  joins = joins.filter(
-    timestamp =>
-      Date.now() - timestamp <=
-      data.security.raidWindow
-  );
-
-  joins.push(Date.now());
-
-  joinTracker.set(
-    key,
-    joins
-  );
+  while (
+    list.length &&
+    now - list[0] > config.security.raidWindow
+  ) {
+    list.shift();
+  }
 
   if (
-    joins.length >=
-    data.security.raidLimit
+    list.length >=
+    config.security.raidJoinLimit
   ) {
-    data.security.lockdown = true;
-    data.statistics.securityEvents++;
-
-    saveDB();
-
     await sendLog(
-      member.guild,
-      "security",
-      "🚨 RAID DETECTED",
-      [
-        `**Joins:** ${joins.length}`,
-        `**Window:** ${data.security.raidWindow / 1000}s`,
-        "**Action:** Security lockdown enabled"
-      ].join("\n"),
-      0xed4245
+      guild,
+      '🚨 Possible Raid Detected',
+      `**${list.length} members** joined within the configured raid window.`,
+      0xED4245
     );
-  }
 
-  await sendLog(
-    member.guild,
-    "members",
-    "📥 Member Joined",
-    [
-      `**User:** ${member.user.tag}`,
-      `**ID:** ${member.id}`,
-      `**Account:** <t:${Math.floor(
-        member.user.createdTimestamp / 1000
-      )}:R>`
-    ].join("\n"),
-    0x57f287
-  );
+    if (config.security.raidTimeout) {
+      await timeoutMember(
+        member,
+        config.automod.timeoutSeconds,
+        'Anti-Raid protection'
+      );
+    }
+  }
 }
 
 /* =========================================================
-   ROLE PROTECTOR
+   SECURITY ACTION TRACKER
 ========================================================= */
 
-async function punishUnauthorizedRoleActor(
+function recordSecurityAction(guildId, executorId, action) {
+  const config = getGuildConfig(guildId);
+
+  const key = `${guildId}:${executorId}:${action}`;
+
+  if (!securityActions.has(key)) {
+    securityActions.set(key, []);
+  }
+
+  const list = securityActions.get(key);
+
+  const now = Date.now();
+
+  list.push(now);
+
+  while (
+    list.length &&
+    now - list[0] >
+      config.security.actionWindow
+  ) {
+    list.shift();
+  }
+
+  return list.length;
+}
+
+async function punishUnauthorizedExecutor(
   guild,
-  userId,
+  executor,
   reason
 ) {
-  const data =
-    getGuildData(guild.id);
+  if (!executor) return;
 
   if (
-    isTrusted(data, userId)
+    isTrusted(guild, executor.id) ||
+    isTrustedBot(guild, executor)
   ) {
     return;
   }
 
   const member =
-    await guild.members
-      .fetch(userId)
-      .catch(() => null);
+    guild.members.cache.get(executor.id) ||
+    await guild.members.fetch(executor.id).catch(() => null);
 
   if (!member) return;
 
   if (
+    member.id === guild.ownerId ||
     member.permissions.has(
       PermissionsBitField.Flags.Administrator
     )
@@ -852,3086 +1274,2246 @@ async function punishUnauthorizedRoleActor(
     return;
   }
 
-  await timeoutMember(
-    member,
-    data.roleProtection.timeoutMinutes,
-    reason
-  );
-
-  await sendLog(
-    guild,
-    "security",
-    "🛡️ ROLE PROTECTOR TRIGGERED",
-    [
-      `**User:** ${member}`,
-      `**Action:** 1 hour timeout`,
-      `**Reason:** ${reason}`
-    ].join("\n"),
-    0xed4245
-  );
-}
-
-async function handleRoleUpdate(
-  oldRole,
-  newRole
-) {
-  const guild =
-    newRole.guild;
-
-  const data =
-    getGuildData(guild.id);
-
-  if (
-    !data.roleProtection.enabled
-  ) {
-    return;
-  }
-
-  if (
-    oldRole.name ===
-      newRole.name &&
-    oldRole.permissions.bitfield ===
-      newRole.permissions.bitfield &&
-    oldRole.color ===
-      newRole.color &&
-    oldRole.position ===
-      newRole.position
-  ) {
-    return;
-  }
-
-  const audit =
-    await guild.fetchAuditLogs({
-      type: 31,
-      limit: 5
-    }).catch(() => null);
-
-  const entry =
-    audit?.entries.find(
-      e =>
-        e.target?.id ===
-        newRole.id &&
-        Date.now() - e.createdTimestamp <
-          15000
-    );
-
-  if (!entry) return;
-
-  const actor =
-    entry.executor;
-
-  if (
-    !actor ||
-    actor.id === client.user.id ||
-    isTrusted(data, actor.id) ||
-    isTrustedBot(data, actor.id)
-  ) {
-    return;
-  }
-
-  const protectedRole =
-    data.roleProtection.protectedRoles
-      .includes(newRole.id);
-
-  if (
-    newRole.id === guild.id &&
-    data.roleProtection.protectEveryone
-  ) {
-    await punishUnauthorizedRoleActor(
-      guild,
-      actor.id,
-      "Unauthorized @everyone role modification"
-    );
-
-    return;
-  }
-
-  if (protectedRole) {
-    await punishUnauthorizedRoleActor(
-      guild,
-      actor.id,
-      `Unauthorized protected role modification: ${newRole.name}`
+  if (member.moderatable) {
+    await timeoutMember(
+      member,
+      3600,
+      `Security protection: ${reason}`
     );
   }
 
   await sendLog(
     guild,
-    "roles",
-    "🛡️ Role Updated",
-    [
-      `**Role:** ${newRole}`,
-      `**Changed By:** ${actor}`,
-      `**Protected:** ${protectedRole ? "Yes" : "No"}`
-    ].join("\n")
-  );
-}
-
-async function handleRoleDelete(role) {
-  const guild = role.guild;
-
-  const data =
-    getGuildData(guild.id);
-
-  if (
-    !data.roleProtection.enabled
-  ) {
-    return;
-  }
-
-  const protectedRole =
-    data.roleProtection.protectedRoles
-      .includes(role.id);
-
-  if (!protectedRole) {
-    return;
-  }
-
-  const audit =
-    await guild.fetchAuditLogs({
-      type: 32,
-      limit: 5
-    }).catch(() => null);
-
-  const entry =
-    audit?.entries.find(
-      e =>
-        e.target?.id === role.id &&
-        Date.now() - e.createdTimestamp <
-          15000
-    );
-
-  if (!entry) return;
-
-  const actor =
-    entry.executor;
-
-  if (
-    !actor ||
-    actor.id === client.user.id ||
-    isTrusted(data, actor.id)
-  ) {
-    return;
-  }
-
-  await punishUnauthorizedRoleActor(
-    guild,
-    actor.id,
-    `Unauthorized deletion of protected role: ${role.name}`
+    '🔐 Security Protection',
+    `Unauthorized action detected.\n\n` +
+    `**Executor:** ${executor.tag || executor.id}\n` +
+    `**Reason:** ${reason}\n` +
+    `**Action:** 1-hour timeout`,
+    0xED4245
   );
 }
 
 /* =========================================================
-   CHANNEL / NUKE PROTECTION
+   ROLE PROTECTION
 ========================================================= */
+
+async function handleRoleUpdate(oldRole, newRole) {
+  const guild = newRole.guild;
+  const config = getGuildConfig(guild.id);
+
+  if (!config.security.enabled) return;
+  if (!config.security.roleProtection) return;
+
+  const protectedRole =
+    config.security.protectedRoles.includes(newRole.id);
+
+  const everyoneRole =
+    newRole.id === guild.id &&
+    config.security.protectEveryone;
+
+  if (!protectedRole && !everyoneRole) return;
+
+  const audit = await guild.fetchAuditLogs({
+    type: AuditLogEvent.RoleUpdate,
+    limit: 5
+  }).catch(() => null);
+
+  const entry = audit?.entries.find(
+    e =>
+      e.target?.id === newRole.id &&
+      Date.now() - e.createdTimestamp < 10000
+  );
+
+  if (!entry) return;
+
+  const executor = entry.executor;
+
+  if (
+    !executor ||
+    isTrusted(guild, executor.id)
+  ) {
+    return;
+  }
+
+  try {
+    await newRole.edit({
+      name: oldRole.name,
+      permissions: oldRole.permissions,
+      color: oldRole.color,
+      hoist: oldRole.hoist,
+      mentionable: oldRole.mentionable
+    });
+  } catch {}
+
+  await punishUnauthorizedExecutor(
+    guild,
+    executor,
+    `Unauthorized protected role modification: ${newRole.name}`
+  );
+}
+
+async function handleRoleCreate(role) {
+  const guild = role.guild;
+  const config = getGuildConfig(guild.id);
+
+  if (!config.security.enabled) return;
+  if (!config.security.antiNuke) return;
+
+  const count = recordSecurityAction(
+    guild.id,
+    'global',
+    'role-create'
+  );
+
+  if (count <= config.security.maxRoleCreates) return;
+
+  const audit = await guild.fetchAuditLogs({
+    type: AuditLogEvent.RoleCreate,
+    limit: 5
+  }).catch(() => null);
+
+  const entry = audit?.entries.find(
+    e =>
+      e.target?.id === role.id &&
+      Date.now() - e.createdTimestamp < 10000
+  );
+
+  if (!entry) return;
+
+  const executor = entry.executor;
+
+  if (
+    !executor ||
+    isTrusted(guild, executor.id)
+  ) {
+    return;
+  }
+
+  try {
+    await role.delete('Anti-Nuke protection');
+  } catch {}
+
+  await punishUnauthorizedExecutor(
+    guild,
+    executor,
+    'Excessive role creation'
+  );
+}
+
+/* =========================================================
+   CHANNEL SECURITY
+========================================================= */
+
+async function handleChannelCreate(channel) {
+  if (!channel.guild) return;
+
+  const guild = channel.guild;
+  const config = getGuildConfig(guild.id);
+
+  if (!config.security.enabled) return;
+  if (!config.security.antiNuke) return;
+
+  const count = recordSecurityAction(
+    guild.id,
+    'global',
+    'channel-create'
+  );
+
+  if (
+    count <= config.security.maxChannelCreates
+  ) {
+    return;
+  }
+
+  const audit = await guild.fetchAuditLogs({
+    type: AuditLogEvent.ChannelCreate,
+    limit: 5
+  }).catch(() => null);
+
+  const entry = audit?.entries.find(
+    e =>
+      e.target?.id === channel.id &&
+      Date.now() - e.createdTimestamp < 10000
+  );
+
+  if (!entry) return;
+
+  const executor = entry.executor;
+
+  if (
+    !executor ||
+    isTrusted(guild, executor.id)
+  ) {
+    return;
+  }
+
+  try {
+    await channel.delete(
+      'Anti-Nuke protection'
+    );
+  } catch {}
+
+  await punishUnauthorizedExecutor(
+    guild,
+    executor,
+    'Excessive channel creation'
+  );
+}
 
 async function handleChannelDelete(channel) {
   if (!channel.guild) return;
 
-  const guild =
-    channel.guild;
+  const guild = channel.guild;
+  const config = getGuildConfig(guild.id);
 
-  const data =
-    getGuildData(guild.id);
+  if (!config.security.enabled) return;
+  if (!config.security.antiNuke) return;
+
+  const count = recordSecurityAction(
+    guild.id,
+    'global',
+    'channel-delete'
+  );
 
   if (
-    !data.security.enabled ||
-    !data.security.antiNuke
+    count <= config.security.maxChannelDeletes
   ) {
     return;
   }
 
-  const audit =
-    await guild.fetchAuditLogs({
-      type: 12,
-      limit: 5
-    }).catch(() => null);
+  const audit = await guild.fetchAuditLogs({
+    type: AuditLogEvent.ChannelDelete,
+    limit: 5
+  }).catch(() => null);
 
-  const entry =
-    audit?.entries.find(
-      e =>
-        e.target?.id === channel.id &&
-        Date.now() - e.createdTimestamp <
-          15000
-    );
+  const entry = audit?.entries.find(
+    e =>
+      e.target?.id === channel.id &&
+      Date.now() - e.createdTimestamp < 10000
+  );
 
   if (!entry) return;
 
-  const actor =
-    entry.executor;
+  const executor = entry.executor;
 
   if (
-    !actor ||
-    actor.id === client.user.id ||
-    isTrusted(data, actor.id) ||
-    isTrustedBot(data, actor.id)
+    !executor ||
+    isTrusted(guild, executor.id)
   ) {
     return;
   }
 
-  const key =
-    `${guild.id}:${actor.id}:channelDelete`;
-
-  let actions =
-    actionTracker.get(key) || [];
-
-  actions = actions.filter(
-    t =>
-      Date.now() - t <=
-      data.security.nukeWindow
+  await punishUnauthorizedExecutor(
+    guild,
+    executor,
+    'Excessive channel deletion'
   );
-
-  actions.push(Date.now());
-
-  actionTracker.set(
-    key,
-    actions
-  );
-
-  data.statistics.securityEvents++;
-
-  if (
-    actions.length >=
-    data.security.nukeLimit
-  ) {
-    const member =
-      await guild.members
-        .fetch(actor.id)
-        .catch(() => null);
-
-    if (
-      member &&
-      member.moderatable
-    ) {
-      await member.timeout(
-        60 * 60 * 1000,
-        "Anti-Nuke protection"
-      ).catch(() => {});
-    }
-
-    data.security.lockdown = true;
-
-    await sendLog(
-      guild,
-      "security",
-      "☢️ ANTI-NUKE TRIGGERED",
-      [
-        `**Actor:** ${actor}`,
-        `**Action:** Channel deletion`,
-        `**Count:** ${actions.length}`,
-        "**Punishment:** 1 hour timeout",
-        "**Lockdown:** Enabled"
-      ].join("\n"),
-      0xed4245
-    );
-
-    actionTracker.delete(key);
-  }
-
-  saveDB();
 }
 
 /* =========================================================
-   TICKET SYSTEM
+   PUNISHMENT DATABASE
 ========================================================= */
 
-function ticketId(data) {
-  data.tickets.counter++;
+function getModerationData(guildId) {
+  const config = getGuildConfig(guildId);
 
-  return (
-    "TICKET-" +
-    String(data.tickets.counter)
-      .padStart(5, "0")
-  );
-}
-
-function findOpenTicket(
-  data,
-  userId
-) {
-  return Object.values(
-    data.tickets.records
-  ).find(
-    t =>
-      t.userId === userId &&
-      t.status === "open"
-  );
-}
-
-async function createTicketPanel(channel) {
-  const row =
-    new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId(
-            "ticket_create"
-          )
-          .setLabel(
-            "Create Support Ticket"
-          )
-          .setEmoji("🎫")
-          .setStyle(
-            ButtonStyle.Primary
-          )
-      );
-
-  await channel.send({
-    embeds: [
-      embed(
-        "🎫 Support Center",
-        [
-          "Need help?",
-          "",
-          "Press the button below to open a support ticket.",
-          "",
-          "• Your ticket is private",
-          "• Support staff will assist you",
-          "• Do not spam multiple tickets"
-        ].join("\n"),
-        0x5865f2
-      )
-    ],
-    components: [row]
-  });
-}
-
-async function createDMTicket(
-  user
-) {
-  const guild =
-    await client.guilds
-      .fetch(SERVER_ID)
-      .catch(() => null);
-
-  if (!guild) {
-    throw new Error(
-      "Configured server not found."
-    );
-  }
-
-  const data =
-    getGuildData(guild.id);
-
-  const existing =
-    findOpenTicket(
-      data,
-      user.id
-    );
-
-  if (existing) {
-    return {
-      existing: true,
-      ticket: existing
+  if (!config.moderationData) {
+    config.moderationData = {
+      warnings: {},
+      punishments: {}
     };
+
+    saveDatabase();
   }
 
-  const id =
-    ticketId(data);
+  return config.moderationData;
+}
 
-  const record = {
-    id,
-    userId: user.id,
-    channelId: null,
-    status: "open",
-    claimedBy: null,
-    createdAt: Date.now(),
-    closedAt: null
+function addWarning(guildId, userId, moderatorId, reason) {
+  const data = getModerationData(guildId);
+
+  if (!data.warnings[userId]) {
+    data.warnings[userId] = [];
+  }
+
+  const warning = {
+    id: Date.now().toString(),
+    moderatorId,
+    reason,
+    timestamp: new Date().toISOString()
   };
 
-  data.tickets.records[id] =
-    record;
+  data.warnings[userId].push(warning);
 
-  data.statistics.tickets++;
+  saveDatabase();
 
-  saveDB();
+  return warning;
+}
 
-  let category = null;
+function addPunishment(
+  guildId,
+  userId,
+  moderatorId,
+  type,
+  reason
+) {
+  const data = getModerationData(guildId);
 
-  if (
-    data.tickets.categoryId
-  ) {
-    category =
-      guild.channels.cache.get(
-        data.tickets.categoryId
-      );
+  if (!data.punishments[userId]) {
+    data.punishments[userId] = [];
   }
 
-  const channel =
-    await guild.channels.create({
-      name:
-        `ticket-${data.tickets.counter}`,
-      type: ChannelType.GuildText,
-      parent:
-        category?.type ===
-        ChannelType.GuildCategory
-          ? category.id
-          : null,
-      permissionOverwrites: [
-        {
-          id: guild.roles.everyone.id,
-          deny: [
-            PermissionsBitField.Flags.ViewChannel
-          ]
-        },
-        {
-          id: user.id,
-          allow: [
-            PermissionsBitField.Flags.ViewChannel,
-            PermissionsBitField.Flags.SendMessages,
-            PermissionsBitField.Flags.ReadMessageHistory
-          ]
-        },
-        {
-          id:
-            SUPPORT_ADMIN_ROLE_ID,
-          allow: [
-            PermissionsBitField.Flags.ViewChannel,
-            PermissionsBitField.Flags.SendMessages,
-            PermissionsBitField.Flags.ReadMessageHistory
-          ]
-        }
-      ]
-    });
-
-  record.channelId =
-    channel.id;
-
-  saveDB();
-
-  const row =
-    new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId(
-            `ticket_close:${id}`
-          )
-          .setLabel("Close")
-          .setEmoji("🔒")
-          .setStyle(
-            ButtonStyle.Danger
-          ),
-        new ButtonBuilder()
-          .setCustomId(
-            `ticket_claim:${id}`
-          )
-          .setLabel("Claim")
-          .setEmoji("🙋")
-          .setStyle(
-            ButtonStyle.Success
-          )
-      );
-
-  await channel.send({
-    content:
-      `<@&${SUPPORT_ADMIN_ROLE_ID}>`,
-    embeds: [
-      embed(
-        `🎫 ${id}`,
-        [
-          `**User:** <@${user.id}>`,
-          "",
-          "A new DM support ticket has been created.",
-          "",
-          "Staff can claim the ticket and reply to the user."
-        ].join("\n"),
-        0x5865f2
-      )
-    ],
-    components: [row]
-  });
-
-  await user.send({
-    embeds: [
-      embed(
-        "🎫 Support Ticket Created",
-        [
-          `Your ticket **${id}** has been created.`,
-          "",
-          "Send your message here and our support team will receive it."
-        ].join("\n"),
-        0x57f287
-      )
-    ]
-  }).catch(() => {});
-
-  await sendLog(
-    guild,
-    "tickets",
-    "🎫 Ticket Created",
-    [
-      `**Ticket:** ${id}`,
-      `**User:** <@${user.id}>`,
-      `**Channel:** ${channel}`
-    ].join("\n"),
-    0x57f287
-  );
-
-  return {
-    existing: false,
-    ticket: record
+  const punishment = {
+    id: Date.now().toString(),
+    moderatorId,
+    type,
+    reason,
+    timestamp: new Date().toISOString()
   };
+
+  data.punishments[userId].push(punishment);
+
+  saveDatabase();
+
+  return punishment;
 }
-
-async function closeTicket(
-  guild,
-  ticket,
-  closerId
-) {
-  const data =
-    getGuildData(guild.id);
-
-  ticket.status = "closed";
-  ticket.closedAt = Date.now();
-
-  saveDB();
-
-  const channel =
-    await guild.channels
-      .fetch(ticket.channelId)
-      .catch(() => null);
-
-  if (channel) {
-    await channel.send({
-      embeds: [
-        embed(
-          "🔒 Ticket Closed",
-          `Closed by <@${closerId}>.`,
-          0xed4245
-        )
-      ]
-    }).catch(() => {});
-
-    await channel.permissionOverwrites
-      .edit(
-        ticket.userId,
-        {
-          SendMessages: false
-        }
-      )
-      .catch(() => {});
-  }
-
-  const user =
-    await client.users
-      .fetch(ticket.userId)
-      .catch(() => null);
-
-  if (user) {
-    await user.send({
-      embeds: [
-        embed(
-          "🔒 Ticket Closed",
-          `Your support ticket **${ticket.id}** has been closed.`,
-          0xed4245
-        )
-      ]
-    }).catch(() => {});
-  }
-
-  await sendLog(
-    guild,
-    "tickets",
-    "🔒 Ticket Closed",
-    [
-      `**Ticket:** ${ticket.id}`,
-      `**Closed By:** <@${closerId}>`
-    ].join("\n"),
-    0xed4245
-  );
-}
-
-async function forwardDM(
-  message
-) {
-  const guild =
-    await client.guilds
-      .fetch(SERVER_ID)
-      .catch(() => null);
-
-  if (!guild) return;
-
-  const data =
-    getGuildData(guild.id);
-
-  let ticket =
-    findOpenTicket(
-      data,
-      message.author.id
-    );
-
-  if (!ticket) {
-    const result =
-      await createDMTicket(
-        message.author
-      );
-
-    ticket =
-      result.ticket;
-  }
-
-  const channel =
-    await guild.channels
-      .fetch(ticket.channelId)
-      .catch(() => null);
-
-  if (!channel) return;
-
-  await channel.send({
-    embeds: [
-      embed(
-        `📩 DM — ${message.author.tag}`,
-        shorten(
-          message.content ||
-          "(Attachment/empty message)",
-          4000
-        ),
-        0x5865f2
-      )
-    ]
-  });
-
-  if (
-    message.attachments.size
-  ) {
-    for (
-      const attachment of
-      message.attachments.values()
-    ) {
-      await channel.send({
-        content:
-          attachment.url
-      }).catch(() => {});
-    }
-  }
-}
-
-/* =========================================================
-   TICKET BUTTONS
-========================================================= */
-
-async function handleTicketButton(
-  interaction
-) {
-  const [action, id] =
-    interaction.customId.split(":");
-
-  const data =
-    getGuildData(
-      interaction.guild.id
-    );
-
-  if (
-    action === "ticket_create"
-  ) {
-    const result =
-      await createDMTicket(
-        interaction.user
-      );
-
-    return interaction.reply({
-      content:
-        result.existing
-          ? `🎫 You already have **${result.ticket.id}**.`
-          : `🎫 Your ticket **${result.ticket.id}** has been created. Check your DMs.`,
-      ephemeral: true
-    });
-  }
-
-  const ticket =
-    data.tickets.records[id];
-
-  if (!ticket) {
-    return interaction.reply({
-      content:
-        "❌ Ticket not found.",
-      ephemeral: true
-    });
-  }
-
-  if (
-    action === "ticket_close"
-  ) {
-    if (!isStaff(interaction)) {
-      return interaction.reply({
-        content:
-          "❌ Staff only.",
-        ephemeral: true
-      });
-    }
-
-    await closeTicket(
-      interaction.guild,
-      ticket,
-      interaction.user.id
-    );
-
-    return interaction.reply({
-      content:
-        "🔒 Ticket closed.",
-      ephemeral: true
-    });
-  }
-
-  if (
-    action === "ticket_claim"
-  ) {
-    if (!isStaff(interaction)) {
-      return interaction.reply({
-        content:
-          "❌ Staff only.",
-        ephemeral: true
-      });
-    }
-
-    ticket.claimedBy =
-      interaction.user.id;
-
-    saveDB();
-
-    await interaction.channel.send({
-      embeds: [
-        embed(
-          "🙋 Ticket Claimed",
-          `Claimed by ${interaction.user}.`,
-          0x57f287
-        )
-      ]
-    });
-
-    return interaction.reply({
-      content:
-        "✅ Ticket claimed.",
-      ephemeral: true
-    });
-  }
-}
-
-/* =========================================================
-   SUGGESTIONS
-========================================================= */
-
-async function submitSuggestion(
-  interaction
-) {
-  const text =
-    interaction.options.getString(
-      "text",
-      true
-    );
-
-  const data =
-    getGuildData(
-      interaction.guild.id
-    );
-
-  const channel =
-    data.suggestions.channelId
-      ? await interaction.guild.channels
-          .fetch(
-            data.suggestions.channelId
-          )
-          .catch(() => null)
-      : interaction.channel;
-
-  if (
-    !channel ||
-    !channel.isTextBased()
-  ) {
-    return interaction.reply({
-      content:
-        "❌ Suggestion channel is not configured.",
-      ephemeral: true
-    });
-  }
-
-  const row =
-    new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId(
-            `suggest_approve:${interaction.user.id}`
-          )
-          .setLabel("Approve")
-          .setEmoji("✅")
-          .setStyle(
-            ButtonStyle.Success
-          ),
-        new ButtonBuilder()
-          .setCustomId(
-            `suggest_decline:${interaction.user.id}`
-          )
-          .setLabel("Decline")
-          .setEmoji("❌")
-          .setStyle(
-            ButtonStyle.Danger
-          )
-      );
-
-  await channel.send({
-    embeds: [
-      embed(
-        "💡 New Suggestion",
-        [
-          `**From:** ${interaction.user}`,
-          "",
-          text,
-          "",
-          "Status: 🟡 Pending"
-        ].join("\n"),
-        0xfee75c
-      )
-    ],
-    components: [row]
-  });
-
-  data.statistics.suggestions++;
-
-  saveDB();
-
-  return interaction.reply({
-    content:
-      "✅ Your suggestion has been submitted.",
-    ephemeral: true
-  });
-}
-
-async function reviewSuggestion(
-  interaction,
-  approved
-) {
-  if (!isStaff(interaction)) {
-    return interaction.reply({
-      content:
-        "❌ Staff only.",
-      ephemeral: true
-    });
-  }
-
-  const message =
-    interaction.message;
-
-  const old =
-    message.embeds[0];
-
-  const description =
-    old?.description || "";
-
-  const cleaned =
-    description.replace(
-      /Status: .*$/m,
-      `Status: ${approved ? "🟢 Approved" : "🔴 Declined"}`
-    );
-
-  await message.edit({
-    embeds: [
-      EmbedBuilder.from(old)
-        .setDescription(
-          cleaned
-        )
-        .setColor(
-          approved
-            ? 0x57f287
-            : 0xed4245
-        )
-    ],
-    components: []
-  });
-
-  await interaction.reply({
-    content:
-      approved
-        ? "✅ Suggestion approved."
-        : "❌ Suggestion declined.",
-    ephemeral: true
-  });
-
-  await sendLog(
-    interaction.guild,
-    "suggestions",
-    approved
-      ? "✅ Suggestion Approved"
-      : "❌ Suggestion Declined",
-    `Reviewed by ${interaction.user}.`,
-    approved
-      ? 0x57f287
-      : 0xed4245
-  );
-}
-
-/* =========================================================
-   ANNOUNCEMENTS
-========================================================= */
-
-async function announcement(
-  interaction
-) {
-  const title =
-    interaction.options.getString(
-      "title",
-      true
-    );
-
-  const message =
-    interaction.options.getString(
-      "message",
-      true
-    );
-
-  const image =
-    interaction.options.getString(
-      "image"
-    );
-
-  const mention =
-    interaction.options.getString(
-      "mention"
-    ) || "";
-
-  const data =
-    getGuildData(
-      interaction.guild.id
-    );
-
-  const channels =
-    data.announcements.channels
-      .map(id =>
-        interaction.guild.channels
-          .cache.get(id)
-      )
-      .filter(
-        c =>
-          c &&
-          c.isTextBased()
-      );
-
-  if (!channels.length) {
-    channels.push(
-      interaction.channel
-    );
-  }
-
-  const roleMention =
-    data.announcements.roles.length
-      ? data.announcements.roles
-          .map(id => `<@&${id}>`)
-          .join(" ")
-      : "";
-
-  const content =
-    [
-      mention,
-      roleMention
-    ]
-      .filter(Boolean)
-      .join(" ");
-
-  const e =
-    embed(
-      `📢 ${title}`,
-      message,
-      0x5865f2
-    )
-      .setFooter({
-        text:
-          `Announcement by ${interaction.user.tag}`
-      });
-
-  if (image) {
-    e.setImage(image);
-  }
-
-  for (
-    const channel of channels
-  ) {
-    await channel.send({
-      content,
-      embeds: [e]
-    }).catch(() => {});
-  }
-
-  return interaction.reply({
-    content:
-      `✅ Announcement sent to ${channels.length} channel(s).`,
-    ephemeral: true
-  });
-}
-
-/* =========================================================
-   COMMANDS
-========================================================= */
-
-const commands = [];
-
-/* HELP */
-
-commands.push(
-  new SlashCommandBuilder()
-    .setName("help")
-    .setDescription(
-      "Show all bot systems and commands"
-    )
-);
-
-/* STATS */
-
-commands.push(
-  new SlashCommandBuilder()
-    .setName("stats")
-    .setDescription(
-      "Show bot statistics"
-    )
-);
-
-/* MODERATION */
-
-commands.push(
-  new SlashCommandBuilder()
-    .setName("warn")
-    .setDescription("Warn a member")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("reason")
-        .setDescription("Reason")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("warnings")
-    .setDescription("View warnings")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("punishments")
-    .setDescription(
-      "View punishment history"
-    )
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("timeout")
-    .setDescription("Timeout a member")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member")
-        .setRequired(true)
-    )
-    .addIntegerOption(o =>
-      o.setName("minutes")
-        .setDescription("Minutes")
-        .setMinValue(1)
-        .setMaxValue(40320)
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("reason")
-        .setDescription("Reason")
-    ),
-
-  new SlashCommandBuilder()
-    .setName("kick")
-    .setDescription("Kick a member")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("reason")
-        .setDescription("Reason")
-    ),
-
-  new SlashCommandBuilder()
-    .setName("ban")
-    .setDescription("Ban a member")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("reason")
-        .setDescription("Reason")
-    ),
-
-  new SlashCommandBuilder()
-    .setName("unban")
-    .setDescription("Unban a user")
-    .addStringOption(o =>
-      o.setName("userid")
-        .setDescription("User ID")
-        .setRequired(true)
-    )
-);
-
-/* AUTOMOD */
-
-const automodCmd =
-  new SlashCommandBuilder()
-    .setName("automod")
-    .setDescription(
-      "Configure Advanced AutoMod"
-    )
-    .addSubcommand(s =>
-      s.setName("enable")
-        .setDescription("Enable AutoMod")
-    )
-    .addSubcommand(s =>
-      s.setName("disable")
-        .setDescription("Disable AutoMod")
-    )
-    .addSubcommand(s =>
-      s.setName("status")
-        .setDescription("View AutoMod")
-    )
-    .addSubcommand(s =>
-      s.setName("invites")
-        .setDescription("Configure invite protection")
-        .addBooleanOption(o =>
-          o.setName("enabled")
-            .setDescription("Enabled")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("spam")
-        .setDescription("Configure spam")
-        .addIntegerOption(o =>
-          o.setName("limit")
-            .setDescription("Messages")
-            .setMinValue(2)
-            .setMaxValue(30)
-            .setRequired(true)
-        )
-        .addIntegerOption(o =>
-          o.setName("window")
-            .setDescription("Seconds")
-            .setMinValue(1)
-            .setMaxValue(60)
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("mentions")
-        .setDescription("Configure mass mentions")
-        .addIntegerOption(o =>
-          o.setName("limit")
-            .setDescription("Limit")
-            .setMinValue(2)
-            .setMaxValue(50)
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("caps")
-        .setDescription("Configure caps")
-        .addIntegerOption(o =>
-          o.setName("percent")
-            .setDescription("Percentage")
-            .setMinValue(50)
-            .setMaxValue(100)
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("badwords")
-        .setDescription("Enable bad words")
-        .addBooleanOption(o =>
-          o.setName("enabled")
-            .setDescription("Enabled")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("addword")
-        .setDescription("Add blocked word")
-        .addStringOption(o =>
-          o.setName("word")
-            .setDescription("Word")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("removeword")
-        .setDescription("Remove blocked word")
-        .addStringOption(o =>
-          o.setName("word")
-            .setDescription("Word")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("log")
-        .setDescription("Set AutoMod log")
-        .addChannelOption(o =>
-          o.setName("channel")
-            .setDescription("Channel")
-            .setRequired(true)
-        )
-    );
-
-commands.push(automodCmd);
-
-/* SECURITY */
-
-const securityCmd =
-  new SlashCommandBuilder()
-    .setName("security")
-    .setDescription(
-      "Configure Security"
-    )
-    .addSubcommand(s =>
-      s.setName("enable")
-        .setDescription("Enable")
-    )
-    .addSubcommand(s =>
-      s.setName("disable")
-        .setDescription("Disable")
-    )
-    .addSubcommand(s =>
-      s.setName("status")
-        .setDescription("Status")
-    )
-    .addSubcommand(s =>
-      s.setName("antiraid")
-        .setDescription("Anti-Raid")
-        .addBooleanOption(o =>
-          o.setName("enabled")
-            .setDescription("Enabled")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("antinuke")
-        .setDescription("Anti-Nuke")
-        .addBooleanOption(o =>
-          o.setName("enabled")
-            .setDescription("Enabled")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("raidlimit")
-        .setDescription("Raid limit")
-        .addIntegerOption(o =>
-          o.setName("limit")
-            .setDescription("Limit")
-            .setMinValue(2)
-            .setMaxValue(100)
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("nukelimit")
-        .setDescription("Nuke limit")
-        .addIntegerOption(o =>
-          o.setName("limit")
-            .setDescription("Limit")
-            .setMinValue(2)
-            .setMaxValue(50)
-            .setRequired(true)
-        )
-    );
-
-commands.push(securityCmd);
-
-/* ROLE PROTECTOR */
-
-const roleProtectorCmd =
-  new SlashCommandBuilder()
-    .setName("roleprotector")
-    .setDescription(
-      "Configure Role Protector"
-    )
-    .addSubcommand(s =>
-      s.setName("enable")
-        .setDescription("Enable")
-    )
-    .addSubcommand(s =>
-      s.setName("disable")
-        .setDescription("Disable")
-    )
-    .addSubcommand(s =>
-      s.setName("status")
-        .setDescription("Status")
-    )
-    .addSubcommand(s =>
-      s.setName("protect")
-        .setDescription("Protect role")
-        .addRoleOption(o =>
-          o.setName("role")
-            .setDescription("Role")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("unprotect")
-        .setDescription("Unprotect role")
-        .addRoleOption(o =>
-          o.setName("role")
-            .setDescription("Role")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("everyone")
-        .setDescription(
-          "Protect @everyone"
-        )
-        .addBooleanOption(o =>
-          o.setName("enabled")
-            .setDescription("Enabled")
-            .setRequired(true)
-        )
-    );
-
-commands.push(roleProtectorCmd);
-
-/* AUTOTIMEOUT */
-
-const autoTimeoutCmd =
-  new SlashCommandBuilder()
-    .setName("autotimeout")
-    .setDescription(
-      "Configure AutoTimeout"
-    )
-    .addSubcommand(s =>
-      s.setName("enable")
-        .setDescription("Enable")
-    )
-    .addSubcommand(s =>
-      s.setName("disable")
-        .setDescription("Disable")
-    )
-    .addSubcommand(s =>
-      s.setName("status")
-        .setDescription("Status")
-    )
-    .addSubcommand(s =>
-      s.setName("duration")
-        .setDescription("Set duration")
-        .addIntegerOption(o =>
-          o.setName("minutes")
-            .setDescription("Minutes")
-            .setMinValue(1)
-            .setMaxValue(40320)
-            .setRequired(true)
-        )
-    );
-
-commands.push(autoTimeoutCmd);
-
-/* TICKETS */
-
-const ticketCmd =
-  new SlashCommandBuilder()
-    .setName("ticket")
-    .setDescription(
-      "Ticket system"
-    )
-    .addSubcommand(s =>
-      s.setName("panel")
-        .setDescription("Create ticket panel")
-        .addChannelOption(o =>
-          o.setName("channel")
-            .setDescription("Channel")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("close")
-        .setDescription("Close current ticket")
-    )
-    .addSubcommand(s =>
-      s.setName("info")
-        .setDescription("Ticket information")
-        .addStringOption(o =>
-          o.setName("id")
-            .setDescription("Ticket ID")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("reply")
-        .setDescription("Reply to ticket")
-        .addStringOption(o =>
-          o.setName("id")
-            .setDescription("Ticket ID")
-            .setRequired(true)
-        )
-        .addStringOption(o =>
-          o.setName("message")
-            .setDescription("Message")
-            .setRequired(true)
-        )
-    );
-
-commands.push(ticketCmd);
-
-/* SUGGEST */
-
-commands.push(
-  new SlashCommandBuilder()
-    .setName("suggest")
-    .setDescription(
-      "Submit a suggestion"
-    )
-    .addStringOption(o =>
-      o.setName("text")
-        .setDescription("Suggestion")
-        .setRequired(true)
-    )
-);
-
-/* ANNOUNCEMENT */
-
-commands.push(
-  new SlashCommandBuilder()
-    .setName("announce")
-    .setDescription(
-      "Send an announcement"
-    )
-    .addStringOption(o =>
-      o.setName("title")
-        .setDescription("Title")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("message")
-        .setDescription("Message")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("image")
-        .setDescription("Image URL")
-    )
-    .addStringOption(o =>
-      o.setName("mention")
-        .setDescription("Mention text")
-    )
-);
-
-/* ANNOUNCEMENT CONFIG */
-
-commands.push(
-  new SlashCommandBuilder()
-    .setName("announcement")
-    .setDescription(
-      "Configure announcements"
-    )
-    .addSubcommand(s =>
-      s.setName("add-channel")
-        .setDescription("Add channel")
-        .addChannelOption(o =>
-          o.setName("channel")
-            .setDescription("Channel")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("remove-channel")
-        .setDescription("Remove channel")
-        .addChannelOption(o =>
-          o.setName("channel")
-            .setDescription("Channel")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("list-channels")
-        .setDescription("List channels")
-    )
-    .addSubcommand(s =>
-      s.setName("add-role")
-        .setDescription("Add mention role")
-        .addRoleOption(o =>
-          o.setName("role")
-            .setDescription("Role")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("remove-role")
-        .setDescription("Remove mention role")
-        .addRoleOption(o =>
-          o.setName("role")
-            .setDescription("Role")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("list-roles")
-        .setDescription("List roles")
-    )
-);
-
-/* TRUSTED */
-
-commands.push(
-  new SlashCommandBuilder()
-    .setName("trusted")
-    .setDescription(
-      "Trusted security system"
-    )
-    .addSubcommand(s =>
-      s.setName("user-add")
-        .setDescription("Trust user")
-        .addUserOption(o =>
-          o.setName("user")
-            .setDescription("User")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("user-remove")
-        .setDescription("Remove trusted user")
-        .addUserOption(o =>
-          o.setName("user")
-            .setDescription("User")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("bot-add")
-        .setDescription("Trust bot")
-        .addUserOption(o =>
-          o.setName("bot")
-            .setDescription("Bot")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("bot-remove")
-        .setDescription("Remove trusted bot")
-        .addUserOption(o =>
-          o.setName("bot")
-            .setDescription("Bot")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("list")
-        .setDescription("List trusted accounts")
-    )
-);
-
-/* LOGS */
-
-commands.push(
-  new SlashCommandBuilder()
-    .setName("logs")
-    .setDescription(
-      "Configure log channels"
-    )
-    .addSubcommand(s =>
-      s.setName("status")
-        .setDescription("View logs")
-    )
-    .addSubcommand(s =>
-      s.setName("automod")
-        .setDescription("Set AutoMod log")
-        .addChannelOption(o =>
-          o.setName("channel")
-            .setDescription("Channel")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("security")
-        .setDescription("Set security log")
-        .addChannelOption(o =>
-          o.setName("channel")
-            .setDescription("Channel")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("audit")
-        .setDescription("Set audit log")
-        .addChannelOption(o =>
-          o.setName("channel")
-            .setDescription("Channel")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(s =>
-      s.setName("moderation")
-        .setDescription("Set moderation log")
-        .addChannelOption(o =>
-          o.setName("channel")
-            .setDescription("Channel")
-            .setRequired(true)
-        )
-    )
-);
-
-/* CONFIG */
-
-commands.push(
-  new SlashCommandBuilder()
-    .setName("config")
-    .setDescription(
-      "Complete configuration"
-    )
-    .addSubcommand(s =>
-      s.setName("status")
-        .setDescription("View configuration")
-    )
-    .addSubcommand(s =>
-      s.setName("reset")
-        .setDescription("Reset configuration")
-    )
-);
 
 /* =========================================================
    COMMAND HANDLER
 ========================================================= */
 
-client.on(
-  Events.InteractionCreate,
-  async interaction => {
+client.on('interactionCreate', async interaction => {
 
-    try {
+  try {
 
-      /* BUTTONS */
+    /* ---------------- BUTTONS ---------------- */
 
-      if (interaction.isButton()) {
+    if (interaction.isButton()) {
 
-        if (
-          interaction.customId ===
-          "ticket_create"
-        ) {
-          const result =
-            await createDMTicket(
-              interaction.user
-            );
+      if (interaction.customId === 'ticket_close') {
 
+        if (!interaction.channel?.name?.startsWith('ticket-')) {
           return interaction.reply({
-            content:
-              result.existing
-                ? `🎫 You already have **${result.ticket.id}**.`
-                : `🎫 Ticket **${result.ticket.id}** created. Check your DMs.`,
+            content: '❌ This is not a ticket channel.',
             ephemeral: true
           });
         }
 
-        if (
-          interaction.customId.startsWith(
-            "ticket_"
-          )
-        ) {
-          return handleTicketButton(
-            interaction
-          );
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({
+            content: '❌ You do not have permission.',
+            ephemeral: true
+          });
         }
 
-        if (
-          interaction.customId.startsWith(
-            "suggest_approve:"
-          )
-        ) {
-          return reviewSuggestion(
-            interaction,
-            true
-          );
+        const topic =
+          interaction.channel.topic || '';
+
+        const match =
+          topic.match(/DM Ticket • (\d+)/);
+
+        if (match) {
+          openTickets.delete(match[1]);
+
+          const user =
+            await client.users.fetch(match[1])
+              .catch(() => null);
+
+          if (user) {
+            await user.send(
+              '🔒 Your support ticket has been closed.'
+            ).catch(() => {});
+          }
         }
 
-        if (
-          interaction.customId.startsWith(
-            "suggest_decline:"
-          )
-        ) {
-          return reviewSuggestion(
-            interaction,
-            false
-          );
-        }
-
-        return;
-      }
-
-      if (
-        !interaction.isChatInputCommand()
-      ) {
-        return;
-      }
-
-      if (
-        !interaction.guild
-      ) {
-        return interaction.reply({
-          content:
-            "❌ This command must be used in a server.",
-          ephemeral: true
-        });
-      }
-
-      const data =
-        getGuildData(
-          interaction.guild.id
+        await interaction.reply(
+          '🔒 Closing ticket...'
         );
 
-      const name =
-        interaction.commandName;
+        await sendLog(
+          interaction.guild,
+          '🔒 Ticket Closed',
+          `Ticket closed by **${interaction.user.tag}**.`
+        );
 
-      const staffOnly = [
-        "warn",
-        "warnings",
-        "punishments",
-        "timeout",
-        "kick",
-        "ban",
-        "unban",
-        "automod",
-        "security",
-        "roleprotector",
-        "autotimeout",
-        "ticket",
-        "announcement",
-        "announce",
-        "trusted",
-        "logs",
-        "config"
-      ];
+        setTimeout(() => {
+          interaction.channel.delete().catch(() => {});
+        }, 1500);
+
+        return;
+      }
 
       if (
-        staffOnly.includes(name) &&
-        !requireStaff(interaction)
+        interaction.customId.startsWith('suggest_')
       ) {
-        return interaction.reply({
-          content:
-            "❌ You need Support Staff/Admin permission.",
-          ephemeral: true
-        });
-      }
 
-      /* HELP */
-
-      if (name === "help") {
-
-        return interaction.reply({
-          embeds: [
-            embed(
-              "🤖 Complete Bot Commands",
-              [
-                "**🎫 Tickets**",
-                "`/ticket panel` `/ticket close` `/ticket info` `/ticket reply`",
-                "",
-                "**🛡️ AutoMod**",
-                "`/automod enable` `/automod disable` `/automod status`",
-                "`/automod invites` `/automod spam` `/automod mentions`",
-                "`/automod caps` `/automod badwords` `/automod addword` `/automod removeword` `/automod log`",
-                "",
-                "**⏱️ AutoTimeout**",
-                "`/autotimeout enable` `/autotimeout disable` `/autotimeout status` `/autotimeout duration`",
-                "",
-                "**🔐 Security**",
-                "`/security enable` `/security disable` `/security status`",
-                "`/security antiraid` `/security antinuke` `/security raidlimit` `/security nukelimit`",
-                "",
-                "**🛡️ Role Protector**",
-                "`/roleprotector enable` `/roleprotector disable` `/roleprotector status`",
-                "`/roleprotector protect` `/roleprotector unprotect` `/roleprotector everyone`",
-                "",
-                "**⚠️ Moderation**",
-                "`/warn` `/warnings` `/punishments` `/timeout` `/kick` `/ban` `/unban`",
-                "",
-                "**💡 Suggestions**",
-                "`/suggest`",
-                "",
-                "**📢 Announcements**",
-                "`/announce` `/announcement`",
-                "",
-                "**🔒 Trusted Security**",
-                "`/trusted`",
-                "",
-                "**📋 Logging**",
-                "`/logs`",
-                "",
-                "**⚙️ Configuration**",
-                "`/config status` `/config reset`",
-                "",
-                "**📊 Statistics**",
-                "`/stats`"
-              ].join("\n"),
-              0x5865f2
-            )
-          ],
-          ephemeral: true
-        });
-      }
-
-      /* STATS */
-
-      if (name === "stats") {
-
-        return interaction.reply({
-          embeds: [
-            embed(
-              "📊 Bot Statistics",
-              [
-                `Servers: ${client.guilds.cache.size}`,
-                `Users: ${client.users.cache.size}`,
-                `Tickets: ${data.statistics.tickets}`,
-                `Suggestions: ${data.statistics.suggestions}`,
-                `Warnings: ${data.statistics.warnings}`,
-                `Punishments: ${data.statistics.punishments}`,
-                `AutoMod Actions: ${data.statistics.automod}`,
-                `Security Events: ${data.statistics.securityEvents}`
-              ].join("\n")
-            )
-          ]
-        });
-      }
-
-      /* WARN */
-
-      if (name === "warn") {
-
-        const user =
-          interaction.options.getUser(
-            "user",
-            true
-          );
-
-        const reason =
-          interaction.options.getString(
-            "reason",
-            true
-          );
-
-        const member =
-          await interaction.guild.members
-            .fetch(user.id)
-            .catch(() => null);
-
-        const record =
-          addWarning(
-            interaction.guild.id,
-            user.id,
-            reason,
-            interaction.user.id
-          );
-
-        let escalation = null;
-
-        if (member) {
-          escalation =
-            await warningEscalation(
-              member,
-              getWarnings(
-                interaction.guild.id,
-                user.id
-              ).length
-            );
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({
+            content:
+              '❌ Only staff can process suggestions.',
+            ephemeral: true
+          });
         }
 
-        await user.send({
-          embeds: [
-            embed(
-              "⚠️ Warning",
-              [
-                `**Server:** ${interaction.guild.name}`,
-                `**Reason:** ${reason}`,
-                `**Warnings:** ${getWarnings(
-                  interaction.guild.id,
-                  user.id
-                ).length}`
-              ].join("\n"),
-              0xfee75c
-            )
-          ]
-        }).catch(() => {});
+        const [, action, id] =
+          interaction.customId.split('_');
 
-        await interaction.reply({
-          embeds: [
-            embed(
-              "⚠️ Warning Issued",
-              [
-                `**User:** ${user}`,
-                `**Reason:** ${reason}`,
-                `**Warning ID:** ${record.id}`,
-                escalation
-                  ? `**Escalation:** ${escalation}`
-                  : ""
-              ].filter(Boolean).join("\n"),
-              0xfee75c
+        const status =
+          action === 'approve'
+            ? 'Approved'
+            : 'Declined';
+
+        const embed =
+          interaction.message.embeds[0];
+
+        const updated =
+          EmbedBuilder.from(embed)
+            .setColor(
+              action === 'approve'
+                ? 0x57F287
+                : 0xED4245
             )
-          ]
+            .addFields({
+              name: 'Status',
+              value:
+                `${status} by ${interaction.user}`
+            });
+
+        await interaction.update({
+          embeds: [updated],
+          components: []
         });
 
         await sendLog(
           interaction.guild,
-          "moderation",
-          "⚠️ Warning",
-          [
-            `**User:** ${user}`,
-            `**Moderator:** ${interaction.user}`,
-            `**Reason:** ${reason}`
-          ].join("\n"),
-          0xfee75c
+          `💡 Suggestion ${status}`,
+          `Suggestion ID: ${id}\n` +
+          `Processed by: ${interaction.user.tag}`
         );
 
         return;
       }
+    }
 
-      /* WARNINGS */
+    /* ---------------- SLASH COMMANDS ---------------- */
 
-      if (name === "warnings") {
+    if (!interaction.isChatInputCommand()) {
+      return;
+    }
 
-        const user =
-          interaction.options.getUser(
-            "user",
-            true
-          );
+    const guild =
+      interaction.guild;
 
-        const list =
-          getWarnings(
-            interaction.guild.id,
-            user.id
-          );
+    if (!guild) {
+      return interaction.reply({
+        content:
+          '❌ This command can only be used in the server.',
+        ephemeral: true
+      });
+    }
 
+    const config =
+      getGuildConfig(guild.id);
+
+    /* ================= TICKET ================= */
+
+    if (interaction.commandName === 'ticket') {
+
+      await interaction.reply({
+        content:
+          '📩 Send me a DM and your support ticket will be created automatically.',
+        ephemeral: true
+      });
+
+      return;
+    }
+
+    if (
+      interaction.commandName ===
+      'close-ticket'
+    ) {
+
+      if (
+        !interaction.channel?.name?.startsWith(
+          'ticket-'
+        )
+      ) {
         return interaction.reply({
-          embeds: [
-            embed(
-              `⚠️ Warnings — ${user.tag}`,
-              list.length
-                ? list.map(
-                    (w, i) =>
-                      `**${i + 1}.** ${w.reason}\nModerator: <@${w.moderatorId}>\n<t:${Math.floor(w.timestamp / 1000)}:R>`
-                  ).join("\n\n")
-                : "No warnings found.",
-              0xfee75c
-            )
-          ],
+          content:
+            '❌ This command can only be used in a ticket channel.',
           ephemeral: true
         });
       }
 
-      /* PUNISHMENTS */
-
-      if (name === "punishments") {
-
-        const user =
-          interaction.options.getUser(
-            "user",
-            true
-          );
-
-        const list =
-          getPunishments(
-            interaction.guild.id,
-            user.id
-          );
-
+      if (!isStaff(interaction.member)) {
         return interaction.reply({
-          embeds: [
-            embed(
-              `📋 Punishments — ${user.tag}`,
-              list.length
-                ? list.slice(-20).reverse()
-                    .map(
-                      p =>
-                        `**${p.type.toUpperCase()}** — ${p.reason}\nModerator: <@${p.moderatorId}>\n<t:${Math.floor(p.timestamp / 1000)}:R>`
-                    ).join("\n\n")
-                : "No punishment history found.",
-              0x5865f2
-            )
-          ],
+          content:
+            '❌ You do not have permission.',
           ephemeral: true
         });
       }
 
-      /* TIMEOUT */
+      const match =
+        (interaction.channel.topic || '')
+          .match(/DM Ticket • (\d+)/);
 
-      if (name === "timeout") {
+      if (match) {
+        openTickets.delete(match[1]);
 
         const user =
-          interaction.options.getUser(
-            "user",
-            true
-          );
-
-        const minutes =
-          interaction.options.getInteger(
-            "minutes",
-            true
-          );
-
-        const reason =
-          interaction.options.getString(
-            "reason"
-          ) ||
-          "No reason provided";
-
-        const member =
-          await interaction.guild.members
-            .fetch(user.id)
+          await client.users.fetch(match[1])
             .catch(() => null);
 
-        if (
-          !member ||
-          !member.moderatable
-        ) {
-          return interaction.reply({
-            content:
-              "❌ I cannot timeout this member.",
-            ephemeral: true
-          });
+        if (user) {
+          await user.send(
+            '🔒 Your support ticket has been closed.'
+          ).catch(() => {});
         }
+      }
 
-        await timeoutMember(
-          member,
-          minutes,
-          reason
-        );
+      await interaction.reply(
+        '🔒 Closing ticket...'
+      );
 
-        addPunishment(
-          interaction.guild.id,
-          user.id,
-          "timeout",
-          reason,
-          interaction.user.id
-        );
+      setTimeout(() => {
+        interaction.channel.delete().catch(() => {});
+      }, 1000);
 
+      return;
+    }
+
+    /* ================= AUTOMOD ================= */
+
+    if (
+      interaction.commandName ===
+      'automod'
+    ) {
+
+      if (!isStaff(interaction.member)) {
         return interaction.reply({
           content:
-            `⏱️ ${user.tag} timed out for ${minutes} minute(s).`
+            '❌ Staff only.',
+          ephemeral: true
         });
       }
 
-      /* KICK */
+      const sub =
+        interaction.options.getSubcommand();
 
-      if (name === "kick") {
+      if (sub === 'enable') {
+        config.automod.enabled = true;
+        saveDatabase();
 
-        const user =
-          interaction.options.getUser(
-            "user",
-            true
+        return interaction.reply(
+          '🛡️ AutoMod enabled.'
+        );
+      }
+
+      if (sub === 'disable') {
+        config.automod.enabled = false;
+        saveDatabase();
+
+        return interaction.reply(
+          '🛡️ AutoMod disabled.'
+        );
+      }
+
+      if (sub === 'status') {
+
+        const embed =
+          new EmbedBuilder()
+            .setTitle('🛡️ AutoMod Status')
+            .setColor(0x5865F2)
+            .addFields(
+              {
+                name: 'System',
+                value:
+                  config.automod.enabled
+                    ? '🟢 Enabled'
+                    : '🔴 Disabled'
+              },
+              {
+                name: 'Invite Links',
+                value:
+                  String(config.automod.invites),
+                inline: true
+              },
+              {
+                name: 'Spam',
+                value:
+                  String(config.automod.spam),
+                inline: true
+              },
+              {
+                name: 'Mass Mentions',
+                value:
+                  String(config.automod.massMentions),
+                inline: true
+              },
+              {
+                name: 'Bad Words',
+                value:
+                  String(config.automod.badWords),
+                inline: true
+              },
+              {
+                name: 'Caps',
+                value:
+                  String(config.automod.caps),
+                inline: true
+              },
+              {
+                name: 'Repeated',
+                value:
+                  String(config.automod.repeatedMessages),
+                inline: true
+              },
+              {
+                name: 'Punishment',
+                value:
+                  config.automod.punishment,
+                inline: true
+              }
+            );
+
+        return interaction.reply({
+          embeds: [embed]
+        });
+      }
+
+      const boolMap = {
+        invites: 'invites',
+        spam: 'spam',
+        mentions: 'massMentions',
+        badwords: 'badWords',
+        caps: 'caps',
+        repeated: 'repeatedMessages'
+      };
+
+      if (boolMap[sub]) {
+
+        config.automod[
+          boolMap[sub]
+        ] =
+          interaction.options.getBoolean(
+            'enabled'
           );
 
-        const reason =
-          interaction.options.getString(
-            "reason"
-          ) ||
-          "No reason provided";
-
-        const member =
-          await interaction.guild.members
-            .fetch(user.id)
-            .catch(() => null);
-
-        if (
-          !member ||
-          !member.kickable
-        ) {
-          return interaction.reply({
-            content:
-              "❌ I cannot kick this member.",
-            ephemeral: true
-          });
-        }
-
-        await member.kick(reason);
-
-        addPunishment(
-          interaction.guild.id,
-          user.id,
-          "kick",
-          reason,
-          interaction.user.id
-        );
-
-        return interaction.reply({
-          content:
-            `👢 ${user.tag} has been kicked.`
-        });
-      }
-
-      /* BAN */
-
-      if (name === "ban") {
-
-        const user =
-          interaction.options.getUser(
-            "user",
-            true
-          );
-
-        const reason =
-          interaction.options.getString(
-            "reason"
-          ) ||
-          "No reason provided";
-
-        await interaction.guild.members.ban(
-          user.id,
-          { reason }
-        );
-
-        addPunishment(
-          interaction.guild.id,
-          user.id,
-          "ban",
-          reason,
-          interaction.user.id
-        );
-
-        return interaction.reply({
-          content:
-            `🔨 ${user.tag} has been banned.`
-        });
-      }
-
-      /* UNBAN */
-
-      if (name === "unban") {
-
-        const id =
-          interaction.options.getString(
-            "userid",
-            true
-          );
-
-        const reason =
-          interaction.options.getString(
-            "reason"
-          ) ||
-          "No reason provided";
-
-        await interaction.guild.members.unban(
-          id,
-          reason
-        );
-
-        addPunishment(
-          interaction.guild.id,
-          id,
-          "unban",
-          reason,
-          interaction.user.id
-        );
-
-        return interaction.reply({
-          content:
-            `🔓 ${id} has been unbanned.`
-        });
-      }
-
-      /* AUTOMOD */
-
-      if (name === "automod") {
-
-        const sub =
-          interaction.options.getSubcommand();
-
-        if (sub === "enable")
-          data.automod.enabled = true;
-
-        if (sub === "disable")
-          data.automod.enabled = false;
-
-        if (sub === "invites")
-          data.automod.invites =
-            interaction.options.getBoolean(
-              "enabled",
-              true
-            );
-
-        if (sub === "spam") {
-          data.automod.spamLimit =
-            interaction.options.getInteger(
-              "limit",
-              true
-            );
-
-          data.automod.spamWindow =
-            interaction.options.getInteger(
-              "window",
-              true
-            ) * 1000;
-        }
-
-        if (sub === "mentions")
-          data.automod.mentionLimit =
-            interaction.options.getInteger(
-              "limit",
-              true
-            );
-
-        if (sub === "caps")
-          data.automod.capsPercent =
-            interaction.options.getInteger(
-              "percent",
-              true
-            );
-
-        if (sub === "badwords")
-          data.automod.badwords =
-            interaction.options.getBoolean(
-              "enabled",
-              true
-            );
-
-        if (sub === "addword") {
-          const word =
-            interaction.options
-              .getString(
-                "word",
-                true
-              )
-              .toLowerCase();
-
-          if (
-            !data.automod.badWords.includes(
-              word
-            )
-          ) {
-            data.automod.badWords.push(
-              word
-            );
-          }
-        }
-
-        if (sub === "removeword") {
-          const word =
-            interaction.options
-              .getString(
-                "word",
-                true
-              )
-              .toLowerCase();
-
-          data.automod.badWords =
-            data.automod.badWords.filter(
-              w => w !== word
-            );
-        }
-
-        if (sub === "log") {
-          const channel =
-            interaction.options.getChannel(
-              "channel",
-              true
-            );
-
-          data.logs.automod =
-            channel.id;
-        }
-
-        saveDB();
-
-        if (sub === "status") {
-          return interaction.reply({
-            embeds: [
-              embed(
-                "🛡️ AutoMod Status",
-                [
-                  `Enabled: ${data.automod.enabled ? "🟢" : "🔴"}`,
-                  `Invites: ${data.automod.invites ? "🟢" : "🔴"}`,
-                  `Spam: ${data.automod.spam ? "🟢" : "🔴"}`,
-                  `Mentions: ${data.automod.mentions ? "🟢" : "🔴"}`,
-                  `Caps: ${data.automod.caps ? "🟢" : "🔴"}`,
-                  `Bad Words: ${data.automod.badwords ? "🟢" : "🔴"}`,
-                  `Repeated: ${data.automod.repeated ? "🟢" : "🔴"}`,
-                  `Log: ${data.logs.automod ? `<#${data.logs.automod}>` : "None"}`
-                ].join("\n")
-              )
-            ],
-            ephemeral: true
-          });
-        }
-
-        return interaction.reply({
-          content:
-            "✅ AutoMod updated.",
-          ephemeral: true
-        });
-      }
-
-      /* SECURITY */
-
-      if (name === "security") {
-
-        const sub =
-          interaction.options.getSubcommand();
-
-        if (sub === "enable")
-          data.security.enabled = true;
-
-        if (sub === "disable")
-          data.security.enabled = false;
-
-        if (sub === "antiraid")
-          data.security.antiRaid =
-            interaction.options.getBoolean(
-              "enabled",
-              true
-            );
-
-        if (sub === "antinuke")
-          data.security.antiNuke =
-            interaction.options.getBoolean(
-              "enabled",
-              true
-            );
-
-        if (sub === "raidlimit")
-          data.security.raidLimit =
-            interaction.options.getInteger(
-              "limit",
-              true
-            );
-
-        if (sub === "nukelimit")
-          data.security.nukeLimit =
-            interaction.options.getInteger(
-              "limit",
-              true
-            );
-
-        saveDB();
-
-        if (sub === "status") {
-          return interaction.reply({
-            embeds: [
-              embed(
-                "🔐 Security Status",
-                [
-                  `Enabled: ${data.security.enabled ? "🟢" : "🔴"}`,
-                  `Anti-Raid: ${data.security.antiRaid ? "🟢" : "🔴"}`,
-                  `Anti-Nuke: ${data.security.antiNuke ? "🟢" : "🔴"}`,
-                  `Raid Limit: ${data.security.raidLimit}`,
-                  `Nuke Limit: ${data.security.nukeLimit}`,
-                  `Lockdown: ${data.security.lockdown ? "🔴" : "🟢"}`
-                ].join("\n")
-              )
-            ],
-            ephemeral: true
-          });
-        }
-
-        return interaction.reply({
-          content:
-            "✅ Security updated.",
-          ephemeral: true
-        });
-      }
-
-      /* ROLE PROTECTOR */
-
-      if (
-        name === "roleprotector"
-      ) {
-
-        const sub =
-          interaction.options.getSubcommand();
-
-        if (sub === "enable")
-          data.roleProtection.enabled =
-            true;
-
-        if (sub === "disable")
-          data.roleProtection.enabled =
-            false;
-
-        if (sub === "everyone")
-          data.roleProtection.protectEveryone =
-            interaction.options.getBoolean(
-              "enabled",
-              true
-            );
-
-        if (
-          sub === "protect" ||
-          sub === "unprotect"
-        ) {
-          const role =
-            interaction.options.getRole(
-              "role",
-              true
-            );
-
-          if (
-            sub === "protect"
-          ) {
-            if (
-              !data.roleProtection.protectedRoles
-                .includes(role.id)
-            ) {
-              data.roleProtection.protectedRoles
-                .push(role.id);
-            }
-          } else {
-            data.roleProtection
-              .protectedRoles =
-              data.roleProtection
-                .protectedRoles.filter(
-                  id => id !== role.id
-                );
-          }
-        }
-
-        saveDB();
-
-        if (sub === "status") {
-          return interaction.reply({
-            embeds: [
-              embed(
-                "🛡️ Role Protector",
-                [
-                  `Enabled: ${data.roleProtection.enabled ? "🟢" : "🔴"}`,
-                  `@everyone: ${data.roleProtection.protectEveryone ? "🟢" : "🔴"}`,
-                  `Protected Roles: ${data.roleProtection.protectedRoles.length}`,
-                  `Unauthorized punishment: ${data.roleProtection.timeoutMinutes} hour`
-                ].join("\n")
-              )
-            ],
-            ephemeral: true
-          });
-        }
-
-        return interaction.reply({
-          content:
-            "✅ Role Protector updated.",
-          ephemeral: true
-        });
-      }
-
-      /* AUTOTIMEOUT */
-
-      if (
-        name === "autotimeout"
-      ) {
-
-        const sub =
-          interaction.options.getSubcommand();
-
-        if (sub === "enable")
-          data.autotimeout.enabled =
-            true;
-
-        if (sub === "disable")
-          data.autotimeout.enabled =
-            false;
-
-        if (sub === "duration")
-          data.autotimeout.duration =
-            interaction.options.getInteger(
-              "minutes",
-              true
-            );
-
-        saveDB();
-
-        if (sub === "status") {
-          return interaction.reply({
-            embeds: [
-              embed(
-                "⏱️ AutoTimeout",
-                [
-                  `Enabled: ${data.autotimeout.enabled ? "🟢" : "🔴"}`,
-                  `Duration: ${data.autotimeout.duration} minutes`,
-                  "Triggers: spam, invites, mentions, bad words, caps and repeated messages"
-                ].join("\n")
-              )
-            ],
-            ephemeral: true
-          });
-        }
-
-        return interaction.reply({
-          content:
-            "✅ AutoTimeout updated.",
-          ephemeral: true
-        });
-      }
-
-      /* TICKETS */
-
-      if (name === "ticket") {
-
-        const sub =
-          interaction.options.getSubcommand();
-
-        if (sub === "panel") {
-          const channel =
-            interaction.options.getChannel(
-              "channel",
-              true
-            );
-
-          await createTicketPanel(
-            channel
-          );
-
-          data.tickets.panelChannelId =
-            channel.id;
-
-          saveDB();
-
-          return interaction.reply({
-            content:
-              `🎫 Ticket panel created in ${channel}.`,
-            ephemeral: true
-          });
-        }
-
-        if (sub === "close") {
-
-          const ticket =
-            Object.values(
-              data.tickets.records
-            ).find(
-              t =>
-                t.channelId ===
-                  interaction.channel.id &&
-                t.status === "open"
-            );
-
-          if (!ticket) {
-            return interaction.reply({
-              content:
-                "❌ This isn't an open ticket.",
-              ephemeral: true
-            });
-          }
-
-          await closeTicket(
-            interaction.guild,
-            ticket,
-            interaction.user.id
-          );
-
-          return interaction.reply({
-            content:
-              "🔒 Ticket closed.",
-            ephemeral: true
-          });
-        }
-
-        if (sub === "info") {
-
-          const id =
-            interaction.options.getString(
-              "id",
-              true
-            );
-
-          const ticket =
-            data.tickets.records[id];
-
-          if (!ticket) {
-            return interaction.reply({
-              content:
-                "❌ Ticket not found.",
-              ephemeral: true
-            });
-          }
-
-          return interaction.reply({
-            embeds: [
-              embed(
-                `🎫 ${ticket.id}`,
-                [
-                  `User: <@${ticket.userId}>`,
-                  `Channel: <#${ticket.channelId}>`,
-                  `Status: ${ticket.status}`,
-                  `Claimed: ${ticket.claimedBy ? `<@${ticket.claimedBy}>` : "No"}`,
-                  `Created: <t:${Math.floor(ticket.createdAt / 1000)}:F>`
-                ].join("\n")
-              )
-            ],
-            ephemeral: true
-          });
-        }
-
-        if (sub === "reply") {
-
-          const id =
-            interaction.options.getString(
-              "id",
-              true
-            );
-
-          const message =
-            interaction.options.getString(
-              "message",
-              true
-            );
-
-          const ticket =
-            data.tickets.records[id];
-
-          if (!ticket) {
-            return interaction.reply({
-              content:
-                "❌ Ticket not found.",
-              ephemeral: true
-            });
-          }
-
-          const user =
-            await client.users.fetch(
-              ticket.userId
-            ).catch(() => null);
-
-          if (!user) {
-            return interaction.reply({
-              content:
-                "❌ User not found.",
-              ephemeral: true
-            });
-          }
-
-          await user.send({
-            embeds: [
-              embed(
-                `💬 Support Reply — ${id}`,
-                message,
-                0x57f287
-              )
-            ]
-          });
-
-          return interaction.reply({
-            content:
-              "📩 Reply sent.",
-            ephemeral: true
-          });
-        }
-      }
-
-      /* SUGGEST */
-
-      if (name === "suggest") {
-        return submitSuggestion(
-          interaction
+        saveDatabase();
+
+        return interaction.reply(
+          `🛡️ ${sub} is now **${
+            config.automod[boolMap[sub]]
+              ? 'enabled'
+              : 'disabled'
+          }**.`
         );
       }
 
-      /* ANNOUNCE */
-
-      if (name === "announce") {
-        return announcement(
-          interaction
-        );
-      }
-
-      /* ANNOUNCEMENT CONFIG */
-
-      if (
-        name === "announcement"
-      ) {
-
-        const sub =
-          interaction.options.getSubcommand();
-
-        if (
-          sub === "add-channel" ||
-          sub === "remove-channel"
-        ) {
-          const channel =
-            interaction.options.getChannel(
-              "channel",
-              true
-            );
-
-          if (
-            sub === "add-channel"
-          ) {
-            if (
-              !data.announcements.channels
-                .includes(channel.id)
-            ) {
-              data.announcements.channels
-                .push(channel.id);
-            }
-          } else {
-            data.announcements.channels =
-              data.announcements.channels
-                .filter(
-                  id =>
-                    id !== channel.id
-                );
-          }
-        }
-
-        if (
-          sub === "list-channels"
-        ) {
-          return interaction.reply({
-            content:
-              data.announcements.channels.length
-                ? data.announcements.channels
-                    .map(id => `<#${id}>`)
-                    .join("\n")
-                : "No channels configured.",
-            ephemeral: true
-          });
-        }
-
-        if (
-          sub === "add-role" ||
-          sub === "remove-role"
-        ) {
-          const role =
-            interaction.options.getRole(
-              "role",
-              true
-            );
-
-          if (
-            sub === "add-role"
-          ) {
-            if (
-              !data.announcements.roles
-                .includes(role.id)
-            ) {
-              data.announcements.roles
-                .push(role.id);
-            }
-          } else {
-            data.announcements.roles =
-              data.announcements.roles
-                .filter(
-                  id =>
-                    id !== role.id
-                );
-          }
-        }
-
-        if (
-          sub === "list-roles"
-        ) {
-          return interaction.reply({
-            content:
-              data.announcements.roles.length
-                ? data.announcements.roles
-                    .map(id => `<@&${id}>`)
-                    .join("\n")
-                : "No roles configured.",
-            ephemeral: true
-          });
-        }
-
-        saveDB();
-
-        return interaction.reply({
-          content:
-            "✅ Announcement configuration updated.",
-          ephemeral: true
-        });
-      }
-
-      /* TRUSTED */
-
-      if (name === "trusted") {
-
-        const sub =
-          interaction.options.getSubcommand();
-
-        if (
-          sub === "user-add" ||
-          sub === "user-remove"
-        ) {
-          const user =
-            interaction.options.getUser(
-              "user",
-              true
-            );
-
-          if (
-            sub === "user-add"
-          ) {
-            if (
-              !data.trusted.users
-                .includes(user.id)
-            ) {
-              data.trusted.users
-                .push(user.id);
-            }
-          } else {
-            data.trusted.users =
-              data.trusted.users.filter(
-                id => id !== user.id
-              );
-          }
-        }
-
-        if (
-          sub === "bot-add" ||
-          sub === "bot-remove"
-        ) {
-          const bot =
-            interaction.options.getUser(
-              "bot",
-              true
-            );
-
-          if (
-            sub === "bot-add"
-          ) {
-            if (
-              !data.trusted.bots
-                .includes(bot.id)
-            ) {
-              data.trusted.bots
-                .push(bot.id);
-            }
-          } else {
-            data.trusted.bots =
-              data.trusted.bots.filter(
-                id => id !== bot.id
-              );
-          }
-        }
-
-        if (sub === "list") {
-          return interaction.reply({
-            embeds: [
-              embed(
-                "🔐 Trusted Accounts",
-                [
-                  "**Users:**",
-                  data.trusted.users.length
-                    ? data.trusted.users
-                        .map(
-                          id => `<@${id}>`
-                        ).join("\n")
-                    : "None",
-                  "",
-                  "**Bots:**",
-                  data.trusted.bots.length
-                    ? data.trusted.bots
-                        .map(
-                          id => `<@${id}>`
-                        ).join("\n")
-                    : "None"
-                ].join("\n")
-              )
-            ],
-            ephemeral: true
-          });
-        }
-
-        saveDB();
-
-        return interaction.reply({
-          content:
-            "✅ Trusted list updated.",
-          ephemeral: true
-        });
-      }
-
-      /* LOGS */
-
-      if (name === "logs") {
-
-        const sub =
-          interaction.options.getSubcommand();
-
-        if (sub === "status") {
-          return interaction.reply({
-            embeds: [
-              embed(
-                "📋 Log Channels",
-                Object.entries(
-                  data.logs
-                )
-                  .map(
-                    ([key, id]) =>
-                      `**${key}:** ${id ? `<#${id}>` : "None"}`
-                  )
-                  .join("\n")
-              )
-            ],
-            ephemeral: true
-          });
-        }
+      if (sub === 'logchannel') {
 
         const channel =
           interaction.options.getChannel(
-            "channel",
-            true
+            'channel'
           );
 
-        data.logs[sub] =
+        config.automod.logChannel =
           channel.id;
 
-        saveDB();
+        saveDatabase();
 
+        return interaction.reply(
+          `📝 AutoMod log channel set to ${channel}.`
+        );
+      }
+
+      if (sub === 'punishment') {
+
+        config.automod.punishment =
+          interaction.options.getString(
+            'type'
+          );
+
+        saveDatabase();
+
+        return interaction.reply(
+          `🛡️ AutoMod punishment set to **${config.automod.punishment}**.`
+        );
+      }
+    }
+
+    /* ================= SECURITY ================= */
+
+    if (
+      interaction.commandName ===
+      'security'
+    ) {
+
+      if (!isStaff(interaction.member)) {
         return interaction.reply({
           content:
-            `✅ ${sub} log channel configured.`,
+            '❌ Staff only.',
           ephemeral: true
         });
       }
 
-      /* CONFIG */
+      const sub =
+        interaction.options.getSubcommand();
 
-      if (name === "config") {
+      if (sub === 'status') {
 
-        const sub =
-          interaction.options.getSubcommand();
+        const embed =
+          new EmbedBuilder()
+            .setTitle('🔐 Security Status')
+            .setColor(0x5865F2)
+            .addFields(
+              {
+                name: 'Security',
+                value:
+                  config.security.enabled
+                    ? '🟢 Enabled'
+                    : '🔴 Disabled'
+              },
+              {
+                name: 'Anti-Raid',
+                value:
+                  config.security.antiRaid
+                    ? '🟢'
+                    : '🔴',
+                inline: true
+              },
+              {
+                name: 'Anti-Nuke',
+                value:
+                  config.security.antiNuke
+                    ? '🟢'
+                    : '🔴',
+                inline: true
+              },
+              {
+                name: 'Role Protection',
+                value:
+                  config.security.roleProtection
+                    ? '🟢'
+                    : '🔴',
+                inline: true
+              }
+            );
 
-        if (sub === "status") {
-          return interaction.reply({
-            embeds: [
-              embed(
-                "⚙️ Complete Configuration",
-                [
-                  `AutoMod: ${data.automod.enabled ? "🟢" : "🔴"}`,
-                  `AutoTimeout: ${data.autotimeout.enabled ? "🟢" : "🔴"}`,
-                  `Anti-Raid: ${data.security.antiRaid ? "🟢" : "🔴"}`,
-                  `Anti-Nuke: ${data.security.antiNuke ? "🟢" : "🔴"}`,
-                  `Role Protector: ${data.roleProtection.enabled ? "🟢" : "🔴"}`,
-                  `@everyone Protection: ${data.roleProtection.protectEveryone ? "🟢" : "🔴"}`,
-                  `Tickets: 🟢`,
-                  `Suggestions: 🟢`,
-                  `Trusted Users: ${data.trusted.users.length}`,
-                  `Trusted Bots: ${data.trusted.bots.length}`,
-                  `Protected Roles: ${data.roleProtection.protectedRoles.length}`
-                ].join("\n")
-              )
-            ],
-            ephemeral: true
-          });
-        }
-
-        if (sub === "reset") {
-          db.guilds[
-            interaction.guild.id
-          ] = defaultGuild();
-
-          saveDB();
-
-          return interaction.reply({
-            content:
-              "⚠️ Server configuration reset.",
-            ephemeral: true
-          });
-        }
+        return interaction.reply({
+          embeds: [embed]
+        });
       }
 
-    } catch (err) {
+      if (sub === 'enable') {
+        config.security.enabled = true;
+        saveDatabase();
 
-      console.error(
-        "Interaction error:",
-        err
-      );
+        return interaction.reply(
+          '🔐 Security enabled.'
+        );
+      }
 
-      if (
-        !interaction.replied &&
-        !interaction.deferred
-      ) {
-        await interaction.reply({
-          content:
-            "❌ An error occurred while processing this command.",
-          ephemeral: true
-        }).catch(() => {});
+      if (sub === 'disable') {
+        config.security.enabled = false;
+        saveDatabase();
+
+        return interaction.reply(
+          '🔐 Security disabled.'
+        );
+      }
+
+      if (sub === 'antiraid') {
+        config.security.antiRaid =
+          interaction.options.getBoolean(
+            'enabled'
+          );
+
+        saveDatabase();
+
+        return interaction.reply(
+          `🚨 Anti-Raid ${
+            config.security.antiRaid
+              ? 'enabled'
+              : 'disabled'
+          }.`
+        );
+      }
+
+      if (sub === 'antinuke') {
+        config.security.antiNuke =
+          interaction.options.getBoolean(
+            'enabled'
+          );
+
+        saveDatabase();
+
+        return interaction.reply(
+          `💣 Anti-Nuke ${
+            config.security.antiNuke
+              ? 'enabled'
+              : 'disabled'
+          }.`
+        );
       }
     }
+
+    /* ================= WARN ================= */
+
+    if (
+      interaction.commandName ===
+      'warn'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const user =
+        interaction.options.getUser(
+          'user'
+        );
+
+      const member =
+        await guild.members.fetch(
+          user.id
+        ).catch(() => null);
+
+      if (!member) {
+        return interaction.reply({
+          content:
+            '❌ Member not found.',
+          ephemeral: true
+        });
+      }
+
+      if (
+        !canModerate(
+          interaction.member,
+          member
+        )
+      ) {
+        return interaction.reply({
+          content:
+            '❌ You cannot moderate this member.',
+          ephemeral: true
+        });
+      }
+
+      const reason =
+        interaction.options.getString(
+          'reason'
+        ) || 'No reason provided';
+
+      const warning =
+        addWarning(
+          guild.id,
+          user.id,
+          interaction.user.id,
+          reason
+        );
+
+      addPunishment(
+        guild.id,
+        user.id,
+        interaction.user.id,
+        'warn',
+        reason
+      );
+
+      const data =
+        getModerationData(guild.id);
+
+      const count =
+        data.warnings[user.id].length;
+
+      if (
+        config.moderation.warnEscalation
+      ) {
+
+        if (
+          count >=
+          config.moderation.warnBanAt
+        ) {
+          await punishMember(
+            member,
+            'ban',
+            'Warning escalation'
+          );
+        } else if (
+          count >=
+          config.moderation.warnKickAt
+        ) {
+          await punishMember(
+            member,
+            'kick',
+            'Warning escalation'
+          );
+        } else if (
+          count >=
+          config.moderation.warnTimeoutAt
+        ) {
+          await punishMember(
+            member,
+            'timeout',
+            'Warning escalation',
+            3600
+          );
+        }
+      }
+
+      await sendLog(
+        guild,
+        '⚠️ Member Warned',
+        `**User:** ${user.tag}\n` +
+        `**Moderator:** ${interaction.user.tag}\n` +
+        `**Reason:** ${reason}\n` +
+        `**Total warnings:** ${count}`
+      );
+
+      await interaction.reply(
+        `⚠️ ${user} warned successfully. Total warnings: **${count}**.`
+      );
+
+      return;
+    }
+
+    /* ================= WARNINGS ================= */
+
+    if (
+      interaction.commandName ===
+      'warnings'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const user =
+        interaction.options.getUser(
+          'user'
+        );
+
+      const data =
+        getModerationData(guild.id);
+
+      const warnings =
+        data.warnings[user.id] || [];
+
+      if (!warnings.length) {
+        return interaction.reply(
+          `📋 ${user} has no warnings.`
+        );
+      }
+
+      const text =
+        warnings
+          .slice(-10)
+          .map(
+            (w, i) =>
+              `**${i + 1}.** ${w.reason}\n` +
+              `Moderator: <@${w.moderatorId}>\n` +
+              `Date: ${new Date(w.timestamp).toLocaleString()}`
+          )
+          .join('\n\n');
+
+      return interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(`📋 Warnings — ${user.tag}`)
+            .setDescription(text)
+            .setColor(0xFEE75C)
+        ]
+      });
+    }
+
+    /* ================= TIMEOUT ================= */
+
+    if (
+      interaction.commandName ===
+      'timeout'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const user =
+        interaction.options.getUser(
+          'user'
+        );
+
+      const member =
+        await guild.members.fetch(
+          user.id
+        ).catch(() => null);
+
+      if (!member) {
+        return interaction.reply(
+          '❌ Member not found.'
+        );
+      }
+
+      if (
+        !canModerate(
+          interaction.member,
+          member
+        )
+      ) {
+        return interaction.reply({
+          content:
+            '❌ You cannot moderate this member.',
+          ephemeral: true
+        });
+      }
+
+      const minutes =
+        interaction.options.getInteger(
+          'minutes'
+        );
+
+      const reason =
+        interaction.options.getString(
+          'reason'
+        ) || 'No reason provided';
+
+      const success =
+        await timeoutMember(
+          member,
+          minutes * 60,
+          reason
+        );
+
+      if (!success) {
+        return interaction.reply(
+          '❌ Unable to timeout this member.'
+        );
+      }
+
+      addPunishment(
+        guild.id,
+        user.id,
+        interaction.user.id,
+        'timeout',
+        reason
+      );
+
+      await sendLog(
+        guild,
+        '⏱️ Member Timed Out',
+        `**User:** ${user.tag}\n` +
+        `**Moderator:** ${interaction.user.tag}\n` +
+        `**Duration:** ${minutes} minutes\n` +
+        `**Reason:** ${reason}`
+      );
+
+      return interaction.reply(
+        `⏱️ ${user} timed out for **${minutes} minutes**.`
+      );
+    }
+
+    /* ================= KICK ================= */
+
+    if (
+      interaction.commandName ===
+      'kick'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const user =
+        interaction.options.getUser(
+          'user'
+        );
+
+      const member =
+        await guild.members.fetch(
+          user.id
+        ).catch(() => null);
+
+      if (!member) {
+        return interaction.reply(
+          '❌ Member not found.'
+        );
+      }
+
+      if (
+        !canModerate(
+          interaction.member,
+          member
+        )
+      ) {
+        return interaction.reply({
+          content:
+            '❌ You cannot kick this member.',
+          ephemeral: true
+        });
+      }
+
+      const reason =
+        interaction.options.getString(
+          'reason'
+        ) || 'No reason provided';
+
+      if (!member.kickable) {
+        return interaction.reply(
+          '❌ I cannot kick this member.'
+        );
+      }
+
+      await member.kick(reason);
+
+      addPunishment(
+        guild.id,
+        user.id,
+        interaction.user.id,
+        'kick',
+        reason
+      );
+
+      await sendLog(
+        guild,
+        '👢 Member Kicked',
+        `**User:** ${user.tag}\n` +
+        `**Moderator:** ${interaction.user.tag}\n` +
+        `**Reason:** ${reason}`
+      );
+
+      return interaction.reply(
+        `👢 ${user.tag} has been kicked.`
+      );
+    }
+
+    /* ================= BAN ================= */
+
+    if (
+      interaction.commandName ===
+      'ban'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const user =
+        interaction.options.getUser(
+          'user'
+        );
+
+      const member =
+        await guild.members.fetch(
+          user.id
+        ).catch(() => null);
+
+      if (
+        member &&
+        !canModerate(
+          interaction.member,
+          member
+        )
+      ) {
+        return interaction.reply({
+          content:
+            '❌ You cannot ban this member.',
+          ephemeral: true
+        });
+      }
+
+      const reason =
+        interaction.options.getString(
+          'reason'
+        ) || 'No reason provided';
+
+      try {
+        await guild.members.ban(
+          user.id,
+          { reason }
+        );
+      } catch {
+        return interaction.reply(
+          '❌ Unable to ban this user.'
+        );
+      }
+
+      addPunishment(
+        guild.id,
+        user.id,
+        interaction.user.id,
+        'ban',
+        reason
+      );
+
+      await sendLog(
+        guild,
+        '🔨 Member Banned',
+        `**User:** ${user.tag}\n` +
+        `**Moderator:** ${interaction.user.tag}\n` +
+        `**Reason:** ${reason}`
+      );
+
+      return interaction.reply(
+        `🔨 ${user.tag} has been banned.`
+      );
+    }
+
+    /* ================= UNBAN ================= */
+
+    if (
+      interaction.commandName ===
+      'unban'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const userId =
+        interaction.options.getString(
+          'userid'
+        );
+
+      const reason =
+        interaction.options.getString(
+          'reason'
+        ) || 'No reason provided';
+
+      try {
+        await guild.members.unban(
+          userId,
+          reason
+        );
+      } catch {
+        return interaction.reply(
+          '❌ Unable to unban this user.'
+        );
+      }
+
+      addPunishment(
+        guild.id,
+        userId,
+        interaction.user.id,
+        'unban',
+        reason
+      );
+
+      await sendLog(
+        guild,
+        '🔓 Member Unbanned',
+        `**User ID:** ${userId}\n` +
+        `**Moderator:** ${interaction.user.tag}\n` +
+        `**Reason:** ${reason}`
+      );
+
+      return interaction.reply(
+        `🔓 \`${userId}\` has been unbanned.`
+      );
+    }
+
+    /* ================= PUNISHMENTS ================= */
+
+    if (
+      interaction.commandName ===
+      'punishments'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const user =
+        interaction.options.getUser(
+          'user'
+        );
+
+      const data =
+        getModerationData(guild.id);
+
+      const punishments =
+        data.punishments[user.id] || [];
+
+      if (!punishments.length) {
+        return interaction.reply(
+          `📋 ${user} has no punishment history.`
+        );
+      }
+
+      const text =
+        punishments
+          .slice(-10)
+          .map(
+            (p, i) =>
+              `**${i + 1}.** ${p.type.toUpperCase()}\n` +
+              `Reason: ${p.reason}\n` +
+              `Moderator: <@${p.moderatorId}>\n` +
+              `Date: ${new Date(p.timestamp).toLocaleString()}`
+          )
+          .join('\n\n');
+
+      return interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(
+              `📋 Punishments — ${user.tag}`
+            )
+            .setDescription(text)
+            .setColor(0xED4245)
+        ]
+      });
+    }
+
+    /* ================= SUGGEST ================= */
+
+    if (
+      interaction.commandName ===
+      'suggest'
+    ) {
+
+      const suggestion =
+        interaction.options.getString(
+          'suggestion'
+        );
+
+      const id =
+        Date.now()
+          .toString()
+          .slice(-8);
+
+      const embed =
+        new EmbedBuilder()
+          .setTitle('💡 New Suggestion')
+          .setDescription(suggestion)
+          .addFields({
+            name: 'Submitted by',
+            value:
+              `${interaction.user}\n\`${interaction.user.id}\``
+          })
+          .setFooter({
+            text: `Suggestion ID: ${id}`
+          })
+          .setColor(0x5865F2)
+          .setTimestamp();
+
+      const row =
+        new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(
+                `suggest_approve_${id}`
+              )
+              .setLabel('Approve')
+              .setEmoji('✅')
+              .setStyle(ButtonStyle.Success),
+
+            new ButtonBuilder()
+              .setCustomId(
+                `suggest_decline_${id}`
+              )
+              .setLabel('Decline')
+              .setEmoji('❌')
+              .setStyle(ButtonStyle.Danger)
+          );
+
+      await interaction.reply({
+        embeds: [embed],
+        components: [row]
+      });
+
+      return;
+    }
+
+    /* ================= CONFIG ================= */
+
+    if (
+      interaction.commandName ===
+      'config'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const sub =
+        interaction.options.getSubcommand();
+
+      if (sub === 'status') {
+
+        const embed =
+          new EmbedBuilder()
+            .setTitle('⚙️ Bot Configuration')
+            .setColor(0x5865F2)
+            .addFields(
+              {
+                name: 'AutoMod',
+                value:
+                  config.automod.enabled
+                    ? '🟢 Enabled'
+                    : '🔴 Disabled'
+              },
+              {
+                name: 'Security',
+                value:
+                  config.security.enabled
+                    ? '🟢 Enabled'
+                    : '🔴 Disabled'
+              },
+              {
+                name: 'Anti-Raid',
+                value:
+                  config.security.antiRaid
+                    ? '🟢 Enabled'
+                    : '🔴 Disabled'
+              },
+              {
+                name: 'Anti-Nuke',
+                value:
+                  config.security.antiNuke
+                    ? '🟢 Enabled'
+                    : '🔴 Disabled'
+              },
+              {
+                name: 'Ticket System',
+                value:
+                  config.tickets.enabled
+                    ? '🟢 Enabled'
+                    : '🔴 Disabled'
+              },
+              {
+                name: 'Log Channel',
+                value:
+                  config.logs.channelId
+                    ? `<#${config.logs.channelId}>`
+                    : 'Not configured'
+              },
+              {
+                name: 'Support Role',
+                value:
+                  `<@&${config.tickets.supportRoleId}>`
+              }
+            );
+
+        return interaction.reply({
+          embeds: [embed]
+        });
+      }
+
+      if (sub === 'logs') {
+
+        const channel =
+          interaction.options.getChannel(
+            'channel'
+          );
+
+        config.logs.channelId =
+          channel.id;
+
+        saveDatabase();
+
+        return interaction.reply(
+          `📝 General log channel set to ${channel}.`
+        );
+      }
+
+      if (sub === 'support-role') {
+
+        const role =
+          interaction.options.getRole(
+            'role'
+          );
+
+        config.tickets.supportRoleId =
+          role.id;
+
+        saveDatabase();
+
+        return interaction.reply(
+          `🎫 Support role set to ${role}.`
+        );
+      }
+    }
+
+    /* ================= TRUST ================= */
+
+    if (
+      interaction.commandName ===
+      'trust'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const sub =
+        interaction.options.getSubcommand();
+
+      if (sub === 'user-add') {
+
+        const user =
+          interaction.options.getUser(
+            'user'
+          );
+
+        if (
+          !config.security.trustedUsers.includes(
+            user.id
+          )
+        ) {
+          config.security.trustedUsers.push(
+            user.id
+          );
+        }
+
+        saveDatabase();
+
+        return interaction.reply(
+          `🤝 ${user} added to trusted users.`
+        );
+      }
+
+      if (sub === 'user-remove') {
+
+        const user =
+          interaction.options.getUser(
+            'user'
+          );
+
+        config.security.trustedUsers =
+          config.security.trustedUsers.filter(
+            id => id !== user.id
+          );
+
+        saveDatabase();
+
+        return interaction.reply(
+          `🤝 ${user} removed from trusted users.`
+        );
+      }
+
+      if (sub === 'bot-add') {
+
+        const bot =
+          interaction.options.getUser(
+            'bot'
+          );
+
+        if (!bot.bot) {
+          return interaction.reply(
+            '❌ That user is not a bot.'
+          );
+        }
+
+        if (
+          !config.security.trustedBots.includes(
+            bot.id
+          )
+        ) {
+          config.security.trustedBots.push(
+            bot.id
+          );
+        }
+
+        saveDatabase();
+
+        return interaction.reply(
+          `🤖 ${bot} added to trusted bots.`
+        );
+      }
+
+      if (sub === 'bot-remove') {
+
+        const bot =
+          interaction.options.getUser(
+            'bot'
+          );
+
+        config.security.trustedBots =
+          config.security.trustedBots.filter(
+            id => id !== bot.id
+          );
+
+        saveDatabase();
+
+        return interaction.reply(
+          `🤖 ${bot} removed from trusted bots.`
+        );
+      }
+
+      if (sub === 'list') {
+
+        const users =
+          config.security.trustedUsers.length
+            ? config.security.trustedUsers
+                .map(id => `<@${id}>`)
+                .join('\n')
+            : 'None';
+
+        const bots =
+          config.security.trustedBots.length
+            ? config.security.trustedBots
+                .map(id => `<@${id}>`)
+                .join('\n')
+            : 'None';
+
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('🤝 Trusted Security List')
+              .addFields(
+                {
+                  name: 'Trusted Users',
+                  value: users
+                },
+                {
+                  name: 'Trusted Bots',
+                  value: bots
+                }
+              )
+              .setColor(0x57F287)
+          ]
+        });
+      }
+    }
+
+    /* ================= ROLE PROTECT ================= */
+
+    if (
+      interaction.commandName ===
+      'role-protect'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const sub =
+        interaction.options.getSubcommand();
+
+      if (sub === 'add') {
+
+        const role =
+          interaction.options.getRole(
+            'role'
+          );
+
+        if (
+          !config.security.protectedRoles.includes(
+            role.id
+          )
+        ) {
+          config.security.protectedRoles.push(
+            role.id
+          );
+        }
+
+        saveDatabase();
+
+        return interaction.reply(
+          `🛡️ ${role} is now protected.`
+        );
+      }
+
+      if (sub === 'remove') {
+
+        const role =
+          interaction.options.getRole(
+            'role'
+          );
+
+        config.security.protectedRoles =
+          config.security.protectedRoles.filter(
+            id => id !== role.id
+          );
+
+        saveDatabase();
+
+        return interaction.reply(
+          `🛡️ ${role} removed from protected roles.`
+        );
+      }
+
+      if (sub === 'list') {
+
+        const roles =
+          config.security.protectedRoles.length
+            ? config.security.protectedRoles
+                .map(id => `<@&${id}>`)
+                .join('\n')
+            : 'None';
+
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('🛡️ Protected Roles')
+              .setDescription(roles)
+              .addFields({
+                name: '@everyone Protection',
+                value:
+                  config.security.protectEveryone
+                    ? '🟢 Enabled'
+                    : '🔴 Disabled'
+              })
+              .setColor(0x5865F2)
+          ]
+        });
+      }
+
+      if (sub === 'everyone') {
+
+        config.security.protectEveryone =
+          interaction.options.getBoolean(
+            'enabled'
+          );
+
+        saveDatabase();
+
+        return interaction.reply(
+          `🛡️ @everyone protection ${
+            config.security.protectEveryone
+              ? 'enabled'
+              : 'disabled'
+          }.`
+        );
+      }
+    }
+
+    /* ================= AUTOTIMEOUT ================= */
+
+    if (
+      interaction.commandName ===
+      'autotimeout'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const sub =
+        interaction.options.getSubcommand();
+
+      if (sub === 'status') {
+
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('⏱️ Auto-Timeout Configuration')
+              .addFields(
+                {
+                  name: 'Default',
+                  value:
+                    `${config.automod.timeoutSeconds}s`
+                },
+                {
+                  name: 'Raid',
+                  value:
+                    `${config.security.raidTimeout ? config.automod.timeoutSeconds : 0}s`
+                }
+              )
+              .setColor(0x5865F2)
+          ]
+        });
+      }
+
+      if (sub === 'set') {
+
+        config.automod.timeoutSeconds =
+          interaction.options.getInteger(
+            'seconds'
+          );
+
+        saveDatabase();
+
+        return interaction.reply(
+          `⏱️ Default AutoMod timeout set to **${config.automod.timeoutSeconds} seconds**.`
+        );
+      }
+
+      if (sub === 'spam') {
+
+        config.automod.timeoutSeconds =
+          interaction.options.getInteger(
+            'seconds'
+          );
+
+        saveDatabase();
+
+        return interaction.reply(
+          `⏱️ Spam timeout set to **${config.automod.timeoutSeconds} seconds**.`
+        );
+      }
+
+      if (sub === 'raid') {
+
+        config.security.raidTimeoutSeconds =
+          interaction.options.getInteger(
+            'seconds'
+          );
+
+        saveDatabase();
+
+        return interaction.reply(
+          `🚨 Raid timeout set to **${config.security.raidTimeoutSeconds} seconds**.`
+        );
+      }
+    }
+
+    /* ================= ANNOUNCEMENTS ================= */
+
+    if (
+      interaction.commandName ===
+      'announcement'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const sub =
+        interaction.options.getSubcommand();
+
+      if (sub === 'send') {
+
+        const channel =
+          interaction.options.getChannel(
+            'channel'
+          );
+
+        const title =
+          interaction.options.getString(
+            'title'
+          );
+
+        const message =
+          interaction.options.getString(
+            'message'
+          );
+
+        const image =
+          interaction.options.getString(
+            'image'
+          );
+
+        const mention =
+          interaction.options.getString(
+            'mention'
+          ) || 'none';
+
+        const embed =
+          new EmbedBuilder()
+            .setTitle(title)
+            .setDescription(message)
+            .setColor(0x5865F2)
+            .setFooter({
+              text:
+                `Announcement • ${guild.name}`
+            })
+            .setTimestamp();
+
+        if (image) {
+          embed.setImage(image);
+        }
+
+        let content;
+
+        if (mention === 'everyone') {
+          content = '@everyone';
+        }
+
+        if (mention === 'here') {
+          content = '@here';
+        }
+
+        await channel.send({
+          content,
+          embeds: [embed],
+          allowedMentions:
+            mention === 'none'
+              ? { parse: [] }
+              : { parse: [mention] }
+        });
+
+        return interaction.reply({
+          content:
+            `📢 Announcement sent to ${channel}.`,
+          ephemeral: true
+        });
+      }
+
+      if (sub === 'channel-add') {
+
+        const channel =
+          interaction.options.getChannel(
+            'channel'
+          );
+
+        if (
+          !config.announcements.channels.includes(
+            channel.id
+          )
+        ) {
+          config.announcements.channels.push(
+            channel.id
+          );
+        }
+
+        saveDatabase();
+
+        return interaction.reply(
+          `📢 ${channel} added to announcement channels.`
+        );
+      }
+
+      if (sub === 'channel-remove') {
+
+        const channel =
+          interaction.options.getChannel(
+            'channel'
+          );
+
+        config.announcements.channels =
+          config.announcements.channels.filter(
+            id => id !== channel.id
+          );
+
+        saveDatabase();
+
+        return interaction.reply(
+          `📢 ${channel} removed from announcement channels.`
+        );
+      }
+
+      if (sub === 'channels') {
+
+        const channels =
+          config.announcements.channels.length
+            ? config.announcements.channels
+                .map(id => `<#${id}>`)
+                .join('\n')
+            : 'No configured channels.';
+
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(
+                '📢 Announcement Channels'
+              )
+              .setDescription(channels)
+              .setColor(0x5865F2)
+          ]
+        });
+      }
+    }
+
+    /* ================= AUDIT ================= */
+
+    if (
+      interaction.commandName ===
+      'audit'
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            '❌ Staff only.',
+          ephemeral: true
+        });
+      }
+
+      const limit =
+        interaction.options.getInteger(
+          'limit'
+        ) || 10;
+
+      const logs =
+        await guild.fetchAuditLogs({
+          limit
+        }).catch(() => null);
+
+      if (!logs) {
+        return interaction.reply(
+          '❌ Unable to read audit logs.'
+        );
+      }
+
+      const text =
+        logs.entries
+          .map(
+            entry =>
+              `**${entry.action}** — ` +
+              `${entry.executor?.tag || entry.executor?.id || 'Unknown'}\n` +
+              `Target: ${entry.target?.id || 'Unknown'}`
+          )
+          .join('\n\n')
+          .slice(0, 3900);
+
+      return interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('🧾 Recent Audit Log')
+            .setDescription(
+              text || 'No entries found.'
+            )
+            .setColor(0x5865F2)
+        ]
+      });
+    }
+
+    /* ================= HELP ================= */
+
+    if (
+      interaction.commandName ===
+      'help'
+    ) {
+
+      const embed =
+        new EmbedBuilder()
+          .setTitle('🤖 Bot Command Center')
+          .setDescription(
+            'Complete command list'
+          )
+          .setColor(0x5865F2)
+          .addFields(
+            {
+              name: '🎫 Tickets',
+              value:
+                '`/ticket`\n`/close-ticket`'
+            },
+            {
+              name: '🛡️ AutoMod',
+              value:
+                '`/automod enable`\n' +
+                '`/automod disable`\n' +
+                '`/automod status`\n' +
+                '`/automod logchannel`\n' +
+                '`/automod invites`\n' +
+                '`/automod spam`\n' +
+                '`/automod mentions`\n' +
+                '`/automod badwords`\n' +
+                '`/automod caps`\n' +
+                '`/automod repeated`\n' +
+                '`/automod punishment`'
+            },
+            {
+              name: '🔐 Security',
+              value:
+                '`/security status`\n' +
+                '`/security enable`\n' +
+                '`/security disable`\n' +
+                '`/security antiraid`\n' +
+                '`/security antinuke`'
+            },
+            {
+              name: '⚖️ Moderation',
+              value:
+                '`/warn`\n' +
+                '`/warnings`\n' +
+                '`/timeout`\n' +
+                '`/kick`\n' +
+                '`/ban`\n' +
+                '`/unban`\n' +
+                '`/punishments`'
+            },
+            {
+              name: '🛡️ Protection',
+              value:
+                '`/role-protect add`\n' +
+                '`/role-protect remove`\n' +
+                '`/role-protect list`\n' +
+                '`/role-protect everyone`\n' +
+                '`/trust user-add`\n' +
+                '`/trust user-remove`\n' +
+                '`/trust bot-add`\n' +
+                '`/trust bot-remove`\n' +
+                '`/trust list`'
+            },
+            {
+              name: '📢 Announcements',
+              value:
+                '`/announcement send`\n' +
+                '`/announcement channel-add`\n' +
+                '`/announcement channel-remove`\n' +
+                '`/announcement channels`'
+            },
+            {
+              name: '⚙️ Configuration',
+              value:
+                '`/config status`\n' +
+                '`/config logs`\n' +
+                '`/config support-role`\n' +
+                '`/autotimeout status`\n' +
+                '`/autotimeout set`\n' +
+                '`/autotimeout spam`\n' +
+                '`/autotimeout raid`'
+            },
+            {
+              name: '💡 Community',
+              value:
+                '`/suggest`'
+            },
+            {
+              name: '🧾 Logs',
+              value:
+                '`/audit`'
+            }
+          );
+
+      return interaction.reply({
+        embeds: [embed]
+      });
+    }
+
+  } catch (error) {
+
+    console.error(
+      'Interaction error:',
+      error
+    );
+
+    if (!interaction.replied &&
+        !interaction.deferred) {
+
+      await interaction.reply({
+        content:
+          '❌ An internal error occurred.',
+        ephemeral: true
+      }).catch(() => {});
+    }
   }
-);
+});
 
 /* =========================================================
    MESSAGE EVENTS
 ========================================================= */
 
-client.on(
-  Events.MessageCreate,
-  async message => {
+client.on('messageCreate', async message => {
 
-    try {
+  try {
 
-      if (!message.guild) {
+    if (!message.guild) {
 
-        if (
-          !message.author.bot
-        ) {
-          await forwardDM(
-            message
-          );
-        }
-
+      if (
+        message.author.bot
+      ) {
         return;
       }
 
-      await handleAutoMod(
+      await createTicketFromDM(
         message
       );
 
-    } catch (err) {
-      console.error(
-        "Message event error:",
-        err
-      );
+      return;
     }
+
+    await relayTicketMessage(
+      message
+    );
+
+    await handleAutoMod(
+      message
+    );
+
+  } catch (error) {
+    console.error(
+      'Message event error:',
+      error
+    );
   }
-);
+});
 
 /* =========================================================
    MEMBER JOIN
 ========================================================= */
 
-client.on(
-  Events.GuildMemberAdd,
-  async member => {
-    await handleMemberJoin(
+client.on('guildMemberAdd', async member => {
+
+  try {
+    if (
+      member.guild.id !==
+      GUILD_ID
+    ) {
+      return;
+    }
+
+    await handleAntiRaid(
       member
-    ).catch(err =>
-      console.error(
-        "Join handler:",
-        err
-      )
+    );
+
+  } catch (error) {
+    console.error(
+      'Member join error:',
+      error
     );
   }
-);
+});
 
 /* =========================================================
    ROLE EVENTS
 ========================================================= */
 
 client.on(
-  Events.GuildRoleUpdate,
-  async (
-    oldRole,
-    newRole
-  ) => {
+  'roleUpdate',
+  async (oldRole, newRole) => {
     await handleRoleUpdate(
       oldRole,
       newRole
-    ).catch(err =>
-      console.error(
-        "Role update:",
-        err
-      )
-    );
+    ).catch(console.error);
   }
 );
 
 client.on(
-  Events.GuildRoleDelete,
+  'roleCreate',
   async role => {
-    await handleRoleDelete(
+    await handleRoleCreate(
       role
-    ).catch(err =>
-      console.error(
-        "Role delete:",
-        err
-      )
-    );
+    ).catch(console.error);
   }
 );
 
@@ -3940,206 +3522,21 @@ client.on(
 ========================================================= */
 
 client.on(
-  Events.ChannelDelete,
+  'channelCreate',
+  async channel => {
+    await handleChannelCreate(
+      channel
+    ).catch(console.error);
+  }
+);
+
+client.on(
+  'channelDelete',
   async channel => {
     await handleChannelDelete(
       channel
-    ).catch(err =>
-      console.error(
-        "Channel delete:",
-        err
-      )
-    );
+    ).catch(console.error);
   }
-);
-
-/* =========================================================
-   MESSAGE LOGS
-========================================================= */
-
-client.on(
-  Events.MessageDelete,
-  async message => {
-
-    if (!message.guild) return;
-
-    await sendLog(
-      message.guild,
-      "messages",
-      "🗑️ Message Deleted",
-      [
-        `**Channel:** ${message.channel}`,
-        `**Author:** ${message.author || "Unknown"}`,
-        `**Content:** ${shorten(
-          message.content,
-          1000
-        ) || "Unknown"}`
-      ].join("\n"),
-      0xed4245
-    );
-  }
-);
-
-/* =========================================================
-   MEMBER LEAVE
-========================================================= */
-
-client.on(
-  Events.GuildMemberRemove,
-  async member => {
-
-    await sendLog(
-      member.guild,
-      "members",
-      "👋 Member Left",
-      [
-        `**User:** ${member.user.tag}`,
-        `**ID:** ${member.id}`
-      ].join("\n"),
-      0xed4245
-    );
-  }
-);
-
-/* =========================================================
-   BAN LOGS
-========================================================= */
-
-client.on(
-  Events.GuildBanAdd,
-  async ban => {
-
-    await sendLog(
-      ban.guild,
-      "moderation",
-      "🔨 Member Banned",
-      `**User:** ${ban.user.tag}\n**ID:** ${ban.user.id}`,
-      0xed4245
-    );
-  }
-);
-
-client.on(
-  Events.GuildBanRemove,
-  async ban => {
-
-    await sendLog(
-      ban.guild,
-      "moderation",
-      "🔓 Member Unbanned",
-      `**User:** ${ban.user.tag}\n**ID:** ${ban.user.id}`,
-      0x57f287
-    );
-  }
-);
-
-/* =========================================================
-   READY
-========================================================= */
-
-client.once(
-  Events.ClientReady,
-  async ready => {
-
-    console.log(
-      `✅ Logged in as ${ready.user.tag}`
-    );
-
-    console.log(
-      `📡 Connected to ${ready.guilds.cache.size} server(s)`
-    );
-
-    console.log(
-      `📋 Registering ${commands.length} slash commands...`
-    );
-
-    try {
-
-      const guild =
-        await client.guilds.fetch(
-          SERVER_ID
-        );
-
-      await guild.commands.set(
-        commands.map(
-          command =>
-            command.toJSON()
-        )
-      );
-
-      console.log(
-        `✅ ${commands.length} slash commands registered in ${guild.name}`
-      );
-
-    } catch (err) {
-
-      console.error(
-        "❌ Slash command registration error:",
-        err
-      );
-    }
-
-    client.user.setPresence({
-      activities: [
-        {
-          name:
-            "🛡️ Server Protection",
-          type:
-            ActivityType.Watching
-        }
-      ],
-      status: "online"
-    });
-
-    console.log(
-      "🎫 DM Ticket System: ONLINE"
-    );
-
-    console.log(
-      "🛡️ Advanced AutoMod: ONLINE"
-    );
-
-    console.log(
-      "⏱️ AutoTimeout: ONLINE"
-    );
-
-    console.log(
-      "🔐 Anti-Raid: ONLINE"
-    );
-
-    console.log(
-      "☢️ Anti-Nuke: ONLINE"
-    );
-
-    console.log(
-      "🛡️ Role Protector: ONLINE"
-    );
-
-    console.log(
-      "📢 Announcement System: ONLINE"
-    );
-
-    console.log(
-      "💡 Suggestion System: ONLINE"
-    );
-
-    console.log(
-      "📋 Logging System: ONLINE"
-    );
-
-    console.log(
-      "💾 Persistent Database: ONLINE"
-    );
-  }
-);
-
-/* =========================================================
-   AUTOSAVE
-========================================================= */
-
-setInterval(
-  saveDB,
-  30000
 );
 
 /* =========================================================
@@ -4147,21 +3544,31 @@ setInterval(
 ========================================================= */
 
 client.on(
-  Events.Error,
+  'error',
   error => {
     console.error(
-      "Discord Client Error:",
+      'Discord client error:',
       error
     );
   }
 );
 
-client.on(
-  Events.Warn,
-  warning => {
-    console.warn(
-      "Discord Warning:",
-      warning
+process.on(
+  'unhandledRejection',
+  error => {
+    console.error(
+      'Unhandled rejection:',
+      error
+    );
+  }
+);
+
+process.on(
+  'uncaughtException',
+  error => {
+    console.error(
+      'Uncaught exception:',
+      error
     );
   }
 );
@@ -4170,14 +3577,4 @@ client.on(
    LOGIN
 ========================================================= */
 
-client.login(
-  TOKEN
-).catch(err => {
-
-  console.error(
-    "❌ Discord login failed:",
-    err
-  );
-
-  process.exit(1);
-});
+client.login(TOKEN);
