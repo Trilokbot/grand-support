@@ -1,7 +1,7 @@
 {
   "name": "dm-ticket-automod-security-bot",
-  "version": "3.0.0",
-  "description": "Discord DM Ticket, AutoMod, Security and Announcement Bot",
+  "version": "4.0.0",
+  "description": "Discord DM Ticket, Advanced AutoMod, Anti-Nuke Security, Audit Logs, Punishment and Suggestions Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
