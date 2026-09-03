@@ -1,7 +1,7 @@
 {
-  "name": "dm-ticket-automod-security-bot",
-  "version": "5.0.0",
-  "description": "Multi-server Discord DM Ticket, Advanced AutoMod, Anti-Nuke Security, Audit Logs, Punishment and Suggestions Bot",
+  "name": "akiyo-discord-bot",
+  "version": "6.0.0",
+  "description": "AkiyO Multi-Server Discord Support, AutoMod, Security and Moderation Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
