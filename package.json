@@ -1,13 +1,13 @@
 {
   "name": "akiyo-discord-bot",
-  "version": "7.0.0",
+  "version": "8.0.0",
   "description": "AkiyO - Advanced Multi-Server Discord Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
   },
   "dependencies": {
     "discord.js": "14.27.0"
